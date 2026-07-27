@@ -1,0 +1,75 @@
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorCollection
+from pymongo import UpdateOne
+
+from app.base.model_base import utc_now
+from app.model.ad_model import AdModel
+
+
+class AdRepository:
+    def __init__(self, collection: AsyncIOMotorCollection) -> None:
+        self._collection = collection
+
+    async def upsert_one(self, ad: AdModel) -> None:
+        now = utc_now()
+        keywords = [keyword for keyword in ad.keywords if keyword]
+        await self._collection.update_one(
+            {"adId": ad.ad_id},
+            {
+                "$addToSet": {
+                    "keywords": {"$each": keywords},
+                    "jobIds": ad.job_id,
+                },
+                "$set": {
+                    "country": ad.country,
+                    "raw": ad.raw,
+                    "updatedAt": now,
+                },
+                "$setOnInsert": {
+                    "adId": ad.ad_id,
+                    "createdAt": now,
+                },
+            },
+            upsert=True,
+        )
+
+    async def upsert_many(self, ads: list[AdModel]) -> int:
+        if not ads:
+            return 0
+
+        now = utc_now()
+        operations: list[UpdateOne] = []
+        for ad in ads:
+            keywords = [keyword for keyword in ad.keywords if keyword]
+            operations.append(
+                UpdateOne(
+                    {"adId": ad.ad_id},
+                    {
+                        "$addToSet": {
+                            "keywords": {"$each": keywords},
+                            "jobIds": ad.job_id,
+                        },
+                        "$set": {
+                            "country": ad.country,
+                            "raw": ad.raw,
+                            "updatedAt": now,
+                        },
+                        "$setOnInsert": {
+                            "adId": ad.ad_id,
+                            "createdAt": now,
+                        },
+                    },
+                    upsert=True,
+                )
+            )
+
+        written = 0
+        chunk_size = 100
+        for index in range(0, len(operations), chunk_size):
+            chunk = operations[index : index + chunk_size]
+            result = await self._collection.bulk_write(chunk, ordered=False)
+            written += result.upserted_count + result.modified_count + result.matched_count
+        return written
+
+    async def count_by_job(self, job_id: ObjectId) -> int:
+        return await self._collection.count_documents({"jobIds": job_id})
