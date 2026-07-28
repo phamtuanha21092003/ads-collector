@@ -13,12 +13,13 @@ class AdRepository:
     async def upsert_one(self, ad: AdModel) -> None:
         now = utc_now()
         keywords = [keyword for keyword in ad.keywords if keyword]
+        job_ids = [job_id for job_id in ad.job_ids if job_id is not None]
         await self._collection.update_one(
             {"adId": ad.ad_id},
             {
                 "$addToSet": {
                     "keywords": {"$each": keywords},
-                    "jobIds": ad.job_id,
+                    "jobIds": {"$each": job_ids},
                 },
                 "$set": {
                     "country": ad.country,
@@ -41,13 +42,14 @@ class AdRepository:
         operations: list[UpdateOne] = []
         for ad in ads:
             keywords = [keyword for keyword in ad.keywords if keyword]
+            job_ids = [job_id for job_id in ad.job_ids if job_id is not None]
             operations.append(
                 UpdateOne(
                     {"adId": ad.ad_id},
                     {
                         "$addToSet": {
                             "keywords": {"$each": keywords},
-                            "jobIds": ad.job_id,
+                            "jobIds": {"$each": job_ids},
                         },
                         "$set": {
                             "country": ad.country,
@@ -68,7 +70,11 @@ class AdRepository:
         for index in range(0, len(operations), chunk_size):
             chunk = operations[index : index + chunk_size]
             result = await self._collection.bulk_write(chunk, ordered=False)
-            written += result.upserted_count + result.modified_count + result.matched_count
+            written += (
+                result.upserted_count
+                + result.modified_count
+                + result.matched_count
+            )
         return written
 
     async def count_by_job(self, job_id: ObjectId) -> int:

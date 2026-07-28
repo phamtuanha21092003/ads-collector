@@ -14,12 +14,12 @@ from loguru import logger
 from app.config import Settings
 from app.db import ads_collection, jobs_collection
 from app.model.ad_model import AdModel
-from app.model.job_model import JobModel
+from app.model.job_model import JobModel, JobType
 from app.mq import RETRY_COUNT_HEADER, declare_jobs_queue
 from app.repository.ad_repo import AdRepository
 from app.repository.job_repo import JobRepository
 from app.service.meta_collector import MetaCollectorService
-from app.util.shopify_util import is_shopify_domain
+from app.util.shopify_util import extract_domain, is_shopify_domain
 
 
 class WorkerLoop:
@@ -247,6 +247,7 @@ class WorkerLoop:
         job = JobModel.model_validate(
             {
                 "keyword": payload.get("keyword"),
+                "type": payload.get("type") or JobType.KEYWORD,
                 "startDate": payload.get("startDate"),
                 "endDate": payload.get("endDate"),
                 "country": payload.get("country") or self._settings.default_country,
@@ -254,6 +255,55 @@ class WorkerLoop:
             }
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
+
+    async def _publish_job(self, job_id: ObjectId) -> None:
+        if self._channel is None or self._channel.is_closed:
+            raise RuntimeError("RabbitMQ channel is not available for job publish")
+
+        await self._channel.default_exchange.publish(
+            aio_pika.Message(
+                body=json.dumps({"jobId": str(job_id)}).encode("utf-8"),
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                content_type="application/json",
+            ),
+            routing_key=self._settings.rabbitmq_queue,
+        )
+
+    async def _spawn_domain_jobs(
+        self,
+        parent: JobModel,
+        domains: set[str],
+    ) -> None:
+        if not domains:
+            return
+
+        for domain in sorted(domains):
+            if await self._job_repo.exists_domain_job(domain):
+                logger.info(
+                    "Skip domain job for {!r} — already exists (parent={})",
+                    domain,
+                    parent.id,
+                )
+                continue
+
+            child = JobModel(
+                keyword=domain,
+                type=JobType.DOMAIN,
+                start_date=parent.start_date,
+                end_date=parent.end_date,
+                country=parent.country,
+                max_results=parent.max_results,
+                user_id=parent.user_id,
+            )
+            child = await self._job_repo.create_pending(child)
+            assert child.id is not None
+            await self._publish_job(child.id)
+            logger.info(
+                "Spawned domain job {} keyword={!r} from parent {}",
+                child.id,
+                domain,
+                parent.id,
+            )
 
     async def _process_job(self, job: JobModel) -> None:
         assert job.id is not None
@@ -269,6 +319,8 @@ class WorkerLoop:
         country = job.country or self._settings.default_country
         loop = asyncio.get_running_loop()
         saved = 0
+        spawn_domains = str(job.type) != JobType.DOMAIN.value
+        pending_domains: set[str] = set()
 
         def on_ad(raw: dict[str, Any]) -> None:
             creative: dict[str, Any] | None = next(
@@ -286,13 +338,18 @@ class WorkerLoop:
             if not is_shopify_domain(link_url):
                 return
 
+            if spawn_domains:
+                domain = extract_domain(link_url)
+                if domain:
+                    pending_domains.add(domain)
+
             nonlocal saved
             ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
             if not ad_id:
                 return
 
             ad = AdModel(
-                job_id=job.id,
+                job_ids=[job.id],
                 ad_id=ad_id,
                 keywords=[job.keyword],
                 country=country,
@@ -315,6 +372,9 @@ class WorkerLoop:
             max_results=max_results,
             on_ad=on_ad,
         )
+
+        if spawn_domains and pending_domains:
+            await self._spawn_domain_jobs(job, pending_domains)
 
         await self._job_repo.mark_done(job.id, ads_count=saved)
         logger.info("Job {} done — saved {} ads", job.id, saved)

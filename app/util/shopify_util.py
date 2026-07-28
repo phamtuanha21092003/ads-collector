@@ -8,6 +8,16 @@ SHOPIFY_IPS = {
 }
 
 
+def extract_domain(url: str) -> str | None:
+    if not url:
+        return None
+    value = url.strip()
+    if not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+    host = (urlparse(value).hostname or "").rstrip(".").lower()
+    return host or None
+
+
 def is_shopify_domain(domain: str, timeout: int = 10) -> bool:
     if not domain.startswith(("http://", "https://")):
         domain = f"https://{domain}"

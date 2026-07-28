@@ -5,12 +5,35 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ReturnDocument
 
 from app.base.model_base import utc_now
-from app.model.job_model import JobModel, JobStatus
+from app.model.job_model import JobModel, JobStatus, JobType
 
 
 class JobRepository:
     def __init__(self, collection: AsyncIOMotorCollection) -> None:
         self._collection = collection
+
+    async def create_pending(self, job: JobModel) -> JobModel:
+        now = utc_now()
+        job.status = JobStatus.PENDING
+        job.updated_at = now
+        job.error = None
+        job.started_at = None
+        job.finished_at = None
+        job.worker_id = None
+        job.ads_count = None
+
+        doc = job.to_mongo()
+        doc.pop("_id", None)
+        result = await self._collection.insert_one(doc)
+        job.id = result.inserted_id
+        return job
+
+    async def exists_domain_job(self, keyword: str) -> bool:
+        doc = await self._collection.find_one(
+            {"type": JobType.DOMAIN.value, "keyword": keyword},
+            projection={"_id": 1},
+        )
+        return doc is not None
 
     async def create_running(self, job: JobModel, worker_id: str) -> JobModel:
         now = utc_now()

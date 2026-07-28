@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
+from bson import ObjectId
 from pydantic import Field
 
 from app.base.model_base import MongoBaseModel
@@ -13,8 +14,14 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class JobType(StrEnum):
+    KEYWORD = "keyword"
+    DOMAIN = "domain"
+
+
 class JobModel(MongoBaseModel):
     keyword: str
+    type: JobType = JobType.KEYWORD
     start_date: date = Field(
         serialization_alias="startDate",
         validation_alias="startDate",
@@ -50,4 +57,9 @@ class JobModel(MongoBaseModel):
         default=None,
         serialization_alias="workerId",
         validation_alias="workerId",
+    )
+    user_id: ObjectId | None = Field(
+        default=None,
+        serialization_alias="userId",
+        validation_alias="userId",
     )
