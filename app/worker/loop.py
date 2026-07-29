@@ -251,7 +251,8 @@ class WorkerLoop:
                 "startDate": payload.get("startDate"),
                 "endDate": payload.get("endDate"),
                 "country": payload.get("country") or self._settings.default_country,
-                "maxResults": payload.get("maxResults"),
+                "maxResults": payload.get("maxResults") or self._settings.max_results_cap,
+                "statusFilter": payload.get("statusFilter", "ALL")
             }
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
@@ -294,6 +295,7 @@ class WorkerLoop:
                 country=parent.country,
                 max_results=parent.max_results,
                 user_id=parent.user_id,
+                status_filter=parent.status_filter
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
@@ -354,6 +356,7 @@ class WorkerLoop:
                 keywords=[job.keyword],
                 country=country,
                 raw=raw,
+                status_filter=job.status_filter,
             )
             asyncio.run_coroutine_threadsafe(
                 self._ad_repo.upsert_one(ad),
@@ -371,6 +374,7 @@ class WorkerLoop:
             country=country,
             max_results=max_results,
             on_ad=on_ad,
+            status_filter=job.status_filter
         )
 
         if spawn_domains and pending_domains:

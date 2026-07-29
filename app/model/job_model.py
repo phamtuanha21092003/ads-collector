@@ -63,3 +63,9 @@ class JobModel(MongoBaseModel):
         serialization_alias="userId",
         validation_alias="userId",
     )
+    status_filter: str | None = Field(
+        default=None,
+        serialization_alias="statusFilter",
+        validation_alias="statusFilter",
+    )
+

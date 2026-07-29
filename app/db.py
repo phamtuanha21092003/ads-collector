@@ -26,14 +26,20 @@ def ads_collection(settings: Settings) -> AsyncIOMotorCollection:
     return get_db(settings)["ads"]
 
 
+def system_configs_collection(settings: Settings) -> AsyncIOMotorCollection:
+    return get_db(settings)["system_configs"]
+
+
 async def ensure_indexes(settings: Settings) -> None:
     jobs = jobs_collection(settings)
     ads = ads_collection(settings)
+    configs = system_configs_collection(settings)
 
     await jobs.create_index([("status", 1), ("createdAt", 1)])
     await ads.create_index([("adId", 1)], unique=True)
     await ads.create_index([("keywords", 1)])
     await ads.create_index([("jobIds", 1)])
+    await configs.create_index([("key", 1)], unique=True, name="idx_system_configs_key_unique")
 
 
 async def close_client() -> None:
