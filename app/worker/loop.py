@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date, timedelta
 from typing import Any
 
 import aio_pika
@@ -20,6 +21,8 @@ from app.repository.ad_repo import AdRepository
 from app.repository.job_repo import JobRepository
 from app.service.meta_collector import MetaCollectorService
 from app.util.shopify_util import extract_domain, is_shopify_domain
+
+DOMAIN_WINDOW_DAYS = 30
 
 
 class WorkerLoop:
@@ -97,11 +100,12 @@ class WorkerLoop:
             assert job.id is not None
 
             logger.info(
-                "Received job {} attempt={}/{} keyword={!r} {} → {}",
+                "Received job {} attempt={}/{} keyword={!r} type={} {} → {}",
                 job.id,
                 retry_count + 1,
                 self._settings.rabbitmq_max_retries,
                 job.keyword,
+                job.type,
                 job.start_date,
                 job.end_date,
             )
@@ -251,8 +255,11 @@ class WorkerLoop:
                 "startDate": payload.get("startDate"),
                 "endDate": payload.get("endDate"),
                 "country": payload.get("country") or self._settings.default_country,
-                "maxResults": payload.get("maxResults") or self._settings.max_results_cap,
-                "statusFilter": payload.get("statusFilter", "ALL")
+                "maxResults": payload.get("maxResults")
+                or self._settings.max_results_cap,
+                "statusFilter": payload.get("statusFilter") or "ALL",
+                "mustReach": payload.get("mustReach") or 0,
+                "metadata": payload.get("metadata"),
             }
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
@@ -270,6 +277,26 @@ class WorkerLoop:
             routing_key=self._settings.rabbitmq_queue,
         )
 
+    @staticmethod
+    def _parent_job_id(metadata: dict[str, Any] | None) -> ObjectId | None:
+        if not metadata:
+            return None
+        raw = metadata.get("parentJobId")
+        if not raw:
+            return None
+        try:
+            return ObjectId(str(raw))
+        except InvalidId:
+            return None
+
+    @staticmethod
+    def _existing_qualified_count(existing: JobModel) -> int:
+        if existing.qualified_ads_count is not None:
+            return int(existing.qualified_ads_count)
+        if existing.ads_count is not None:
+            return int(existing.ads_count)
+        return 0
+
     async def _spawn_domain_jobs(
         self,
         parent: JobModel,
@@ -278,53 +305,71 @@ class WorkerLoop:
         if not domains:
             return
 
+        assert parent.id is not None
+        end = date.today()
+        start = end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
+
         for domain in sorted(domains):
-            if await self._job_repo.exists_domain_job(domain):
+            existing = await self._job_repo.find_overlapping_domain_job(
+                domain, start, end
+            )
+            if existing is not None:
+                count = self._existing_qualified_count(existing)
+                if count > 0:
+                    await self._job_repo.increment_parent_qualified(parent.id, count)
                 logger.info(
-                    "Skip domain job for {!r} — already exists (parent={})",
+                    "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
+                    "→ parent {} (+{})",
+                    existing.id,
                     domain,
+                    count,
                     parent.id,
+                    count,
                 )
                 continue
 
             child = JobModel(
                 keyword=domain,
                 type=JobType.DOMAIN,
-                start_date=parent.start_date,
-                end_date=parent.end_date,
+                start_date=start,
+                end_date=end,
                 country=parent.country,
                 max_results=parent.max_results,
                 user_id=parent.user_id,
-                status_filter=parent.status_filter
+                status_filter=parent.status_filter,
+                metadata={"parentJobId": str(parent.id)},
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
             await self._publish_job(child.id)
             logger.info(
-                "Spawned domain job {} keyword={!r} from parent {}",
+                "Spawned domain job {} keyword={!r} {} → {} from parent {}",
                 child.id,
                 domain,
+                start,
+                end,
                 parent.id,
             )
 
-    async def _process_job(self, job: JobModel) -> None:
+    async def _search_window(
+        self,
+        *,
+        job: JobModel,
+        start_date: date,
+        end_date: date,
+        country: str,
+        max_results: int,
+        seen_ad_ids: set[str],
+        pending_domains: set[str] | None,
+        collect_domains: bool,
+    ) -> int:
+        """Run one Meta search window. Returns number of newly saved ads."""
         assert job.id is not None
-        if job.start_date > job.end_date:
-            raise ValueError(
-                f"startDate {job.start_date} must be on or before endDate {job.end_date}"
-            )
-
-        max_results = job.max_results
-        if max_results is None or max_results > self._settings.max_results_cap:
-            max_results = self._settings.max_results_cap
-
-        country = job.country or self._settings.default_country
         loop = asyncio.get_running_loop()
-        saved = 0
-        spawn_domains = str(job.type) != JobType.DOMAIN.value
-        pending_domains: set[str] = set()
+        new_saved = 0
 
         def on_ad(raw: dict[str, Any]) -> None:
+            nonlocal new_saved
             creative: dict[str, Any] | None = next(
                 (
                     c
@@ -340,14 +385,13 @@ class WorkerLoop:
             if not is_shopify_domain(link_url):
                 return
 
-            if spawn_domains:
+            if collect_domains and pending_domains is not None:
                 domain = extract_domain(link_url)
                 if domain:
                     pending_domains.add(domain)
 
-            nonlocal saved
             ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
-            if not ad_id:
+            if not ad_id or ad_id in seen_ad_ids:
                 return
 
             ad = AdModel(
@@ -356,29 +400,156 @@ class WorkerLoop:
                 keywords=[job.keyword],
                 country=country,
                 raw=raw,
-                status_filter=job.status_filter,
             )
             asyncio.run_coroutine_threadsafe(
                 self._ad_repo.upsert_one(ad),
                 loop,
             ).result()
-            saved += 1
-            if saved == 1 or saved % 10 == 0:
-                logger.info("Job {} saved {} ads so far", job.id, saved)
+            seen_ad_ids.add(ad_id)
+            new_saved += 1
+            total = len(seen_ad_ids)
+            if total == 1 or total % 10 == 0:
+                logger.info("Job {} saved {} ads so far", job.id, total)
 
         await asyncio.to_thread(
             self._meta.search,
             keyword=job.keyword,
+            start_date=start_date,
+            end_date=end_date,
+            country=country,
+            max_results=max_results,
+            on_ad=on_ad,
+            status_filter=job.status_filter,
+        )
+        return new_saved
+
+    async def _process_keyword_job(
+        self,
+        job: JobModel,
+        *,
+        country: str,
+        max_results: int,
+    ) -> int:
+        pending_domains: set[str] = set()
+        seen_ad_ids: set[str] = set()
+        must_reach = int(job.must_reach or 0)
+
+        if must_reach <= 0:
+            await self._search_window(
+                job=job,
+                start_date=job.start_date,
+                end_date=job.end_date,
+                country=country,
+                max_results=max_results,
+                seen_ad_ids=seen_ad_ids,
+                pending_domains=pending_domains,
+                collect_domains=True,
+            )
+        else:
+            window_end = date.today()
+            window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
+            while True:
+                before = len(seen_ad_ids)
+                logger.info(
+                    "Job {} mustReach={} window {} → {} (saved={})",
+                    job.id,
+                    must_reach,
+                    window_start,
+                    window_end,
+                    before,
+                )
+                await self._search_window(
+                    job=job,
+                    start_date=window_start,
+                    end_date=window_end,
+                    country=country,
+                    max_results=max_results,
+                    seen_ad_ids=seen_ad_ids,
+                    pending_domains=pending_domains,
+                    collect_domains=True,
+                )
+                saved = len(seen_ad_ids)
+                new_saved = saved - before
+                if saved > must_reach:
+                    logger.info(
+                        "Job {} reached mustReach ({} > {})",
+                        job.id,
+                        saved,
+                        must_reach,
+                    )
+                    break
+                if new_saved == 0:
+                    logger.info(
+                        "Job {} mustReach stop — no new ads in window {} → {}",
+                        job.id,
+                        window_start,
+                        window_end,
+                    )
+                    break
+                window_end = window_start - timedelta(days=1)
+                window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
+
+        if pending_domains:
+            await self._spawn_domain_jobs(job, pending_domains)
+
+        return len(seen_ad_ids)
+
+    async def _process_domain_job(
+        self,
+        job: JobModel,
+        *,
+        country: str,
+        max_results: int,
+    ) -> int:
+        seen_ad_ids: set[str] = set()
+        await self._search_window(
+            job=job,
             start_date=job.start_date,
             end_date=job.end_date,
             country=country,
             max_results=max_results,
-            on_ad=on_ad,
-            status_filter=job.status_filter
+            seen_ad_ids=seen_ad_ids,
+            pending_domains=None,
+            collect_domains=False,
         )
+        return len(seen_ad_ids)
 
-        if spawn_domains and pending_domains:
-            await self._spawn_domain_jobs(job, pending_domains)
+    async def _process_job(self, job: JobModel) -> None:
+        assert job.id is not None
+        if job.start_date > job.end_date:
+            raise ValueError(
+                f"startDate {job.start_date} must be on or before endDate {job.end_date}"
+            )
 
-        await self._job_repo.mark_done(job.id, ads_count=saved)
+        max_results = job.max_results
+        if max_results is None or max_results > self._settings.max_results_cap:
+            max_results = self._settings.max_results_cap
+
+        country = job.country or self._settings.default_country
+        is_domain = str(job.type) == JobType.DOMAIN.value
+
+        if is_domain:
+            saved = await self._process_domain_job(
+                job, country=country, max_results=max_results
+            )
+            await self._job_repo.mark_done(
+                job.id,
+                ads_count=saved,
+                qualified_ads_count=saved,
+            )
+            parent_id = self._parent_job_id(job.metadata)
+            if parent_id is not None and saved > 0:
+                await self._job_repo.increment_parent_qualified(parent_id, saved)
+                logger.info(
+                    "Domain job {} qualifiedAdsCount={} → parent {}",
+                    job.id,
+                    saved,
+                    parent_id,
+                )
+        else:
+            saved = await self._process_keyword_job(
+                job, country=country, max_results=max_results
+            )
+            await self._job_repo.mark_done(job.id, ads_count=saved)
+
         logger.info("Job {} done — saved {} ads", job.id, saved)

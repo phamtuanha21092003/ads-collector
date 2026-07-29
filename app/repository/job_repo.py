@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -28,12 +28,23 @@ class JobRepository:
         job.id = result.inserted_id
         return job
 
-    async def exists_domain_job(self, keyword: str) -> bool:
+    async def find_overlapping_domain_job(
+        self,
+        keyword: str,
+        start: date,
+        end: date,
+    ) -> JobModel | None:
+        start_s = start.isoformat()
+        end_s = end.isoformat()
         doc = await self._collection.find_one(
-            {"type": JobType.DOMAIN.value, "keyword": keyword},
-            projection={"_id": 1},
+            {
+                "type": JobType.DOMAIN.value,
+                "keyword": keyword,
+                "startDate": {"$lte": end_s},
+                "endDate": {"$gte": start_s},
+            }
         )
-        return doc is not None
+        return JobModel.from_mongo(doc)
 
     async def create_running(self, job: JobModel, worker_id: str) -> JobModel:
         now = utc_now()
@@ -70,19 +81,35 @@ class JobRepository:
         self,
         job_id: ObjectId,
         ads_count: int,
+        *,
+        qualified_ads_count: int | None = None,
         finished_at: datetime | None = None,
     ) -> None:
         now = finished_at or utc_now()
+        fields: dict = {
+            "status": JobStatus.DONE.value,
+            "adsCount": ads_count,
+            "finishedAt": now,
+            "updatedAt": now,
+            "error": None,
+        }
+        if qualified_ads_count is not None:
+            fields["qualifiedAdsCount"] = qualified_ads_count
+        await self._collection.update_one({"_id": job_id}, {"$set": fields})
+
+    async def increment_parent_qualified(
+        self,
+        parent_id: ObjectId,
+        count: int,
+    ) -> None:
+        if count <= 0:
+            return
+        now = utc_now()
         await self._collection.update_one(
-            {"_id": job_id},
+            {"_id": parent_id},
             {
-                "$set": {
-                    "status": JobStatus.DONE.value,
-                    "adsCount": ads_count,
-                    "finishedAt": now,
-                    "updatedAt": now,
-                    "error": None,
-                }
+                "$inc": {"qualifiedAdsCount": count},
+                "$set": {"updatedAt": now},
             },
         )
 

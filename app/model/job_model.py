@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Any
 
 from bson import ObjectId
 from pydantic import Field
@@ -68,4 +69,14 @@ class JobModel(MongoBaseModel):
         serialization_alias="statusFilter",
         validation_alias="statusFilter",
     )
-
+    must_reach: int = Field(
+        default=0,
+        serialization_alias="mustReach",
+        validation_alias="mustReach",
+    )
+    qualified_ads_count: int | None = Field(
+        default=None,
+        serialization_alias="qualifiedAdsCount",
+        validation_alias="qualifiedAdsCount",
+    )
+    metadata: dict[str, Any] | None = None
