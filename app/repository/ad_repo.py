@@ -86,13 +86,13 @@ class AdRepository:
         self,
         parent_id: ObjectId,
         count: int,
-        shop: str
+        shop: str,
     ) -> None:
         if count <= 0:
             return
         now = utc_now()
         await self._collection.update_one(
-            {"jobIds": parent_id, shop: shop},
+            {"jobIds": parent_id, "shop": shop},
             {
                 "$set": {"updatedAt": now, "qualifiedAdsCount": count},
             },

@@ -79,4 +79,9 @@ class JobModel(MongoBaseModel):
         serialization_alias="qualifiedAdsCount",
         validation_alias="qualifiedAdsCount",
     )
+    store_count: int | None = Field(
+        default=None,
+        serialization_alias="storeCount",
+        validation_alias="storeCount",
+    )
     metadata: dict[str, Any] | None = None

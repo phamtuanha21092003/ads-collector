@@ -83,6 +83,7 @@ class JobRepository:
         ads_count: int,
         *,
         qualified_ads_count: int | None = None,
+        store_count: int | None = None,
         finished_at: datetime | None = None,
     ) -> None:
         now = finished_at or utc_now()
@@ -95,6 +96,8 @@ class JobRepository:
         }
         if qualified_ads_count is not None:
             fields["qualifiedAdsCount"] = qualified_ads_count
+        if store_count is not None:
+            fields["storeCount"] = store_count
         await self._collection.update_one({"_id": job_id}, {"$set": fields})
 
     async def mark_failed(

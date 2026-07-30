@@ -13,12 +13,13 @@ from bson.errors import InvalidId
 from loguru import logger
 
 from app.config import Settings
-from app.db import ads_collection, jobs_collection
+from app.db import ads_collection, jobs_collection, shops_collection
 from app.model.ad_model import AdModel
 from app.model.job_model import JobModel, JobType
 from app.mq import RETRY_COUNT_HEADER, declare_jobs_queue
 from app.repository.ad_repo import AdRepository
 from app.repository.job_repo import JobRepository
+from app.repository.shop_repo import ShopRepository
 from app.service.meta_collector import MetaCollectorService
 from app.util.shopify_util import extract_domain, is_shopify_domain
 
@@ -31,11 +32,13 @@ class WorkerLoop:
         settings: Settings,
         job_repo: JobRepository | None = None,
         ad_repo: AdRepository | None = None,
+        shop_repo: ShopRepository | None = None,
         meta: MetaCollectorService | None = None,
     ) -> None:
         self._settings = settings
         self._job_repo = job_repo or JobRepository(jobs_collection(settings))
         self._ad_repo = ad_repo or AdRepository(ads_collection(settings))
+        self._shop_repo = shop_repo or ShopRepository(shops_collection(settings))
         self._meta = meta or MetaCollectorService()
         self._stopping = False
         self._channel: Channel | None = None
@@ -310,13 +313,18 @@ class WorkerLoop:
         start = end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
 
         for domain in sorted(domains):
+            await self._shop_repo.upsert_for_domain(domain, parent.id)
+
             existing = await self._job_repo.find_overlapping_domain_job(
                 domain, start, end
             )
             if existing is not None:
                 count = self._existing_qualified_count(existing)
                 if count > 0:
-                    await self._ad_repo.update_ads_qualified(parent_id=parent.id, count=count, shop=domain)
+                    await self._ad_repo.update_ads_qualified(
+                        parent_id=parent.id, count=count, shop=domain
+                    )
+                    await self._shop_repo.update_qualified_ads_count(domain, count)
                 logger.info(
                     "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
                     "→ parent {} (+{})",
@@ -341,6 +349,7 @@ class WorkerLoop:
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
+            await self._shop_repo.upsert_for_domain(domain, child.id)
             await self._publish_job(child.id)
             logger.info(
                 "Spawned domain job {} keyword={!r} {} → {} from parent {}",
@@ -431,7 +440,7 @@ class WorkerLoop:
         *,
         country: str,
         max_results: int,
-    ) -> int:
+    ) -> tuple[int, int]:
         pending_domains: set[str] = set()
         seen_ad_ids: set[str] = set()
         must_reach = int(job.must_reach or 0)
@@ -494,7 +503,7 @@ class WorkerLoop:
         if pending_domains:
             await self._spawn_domain_jobs(job, pending_domains)
 
-        return len(seen_ad_ids)
+        return len(seen_ad_ids), len(pending_domains)
 
     async def _process_domain_job(
         self,
@@ -542,17 +551,32 @@ class WorkerLoop:
             parent_id = self._parent_job_id(job.metadata)
             if parent_id is not None and saved > 0:
                 shop = job.keyword
-                await self._ad_repo.update_ads_qualified(parent_id=parent_id, count=saved, shop=shop)
+                await self._ad_repo.update_ads_qualified(
+                    parent_id=parent_id, count=saved, shop=shop
+                )
+                await self._shop_repo.update_qualified_ads_count(shop, saved)
                 logger.info(
-                    "Domain job {} qualifiedAdsCount={} → parent {}",
+                    "Domain job {} qualifiedAdsCount={} → parent {} shop={!r}",
                     job.id,
                     saved,
                     parent_id,
+                    shop,
                 )
         else:
-            saved = await self._process_keyword_job(
+            saved, store_count = await self._process_keyword_job(
                 job, country=country, max_results=max_results
             )
-            await self._job_repo.mark_done(job.id, ads_count=saved)
+            await self._job_repo.mark_done(
+                job.id,
+                ads_count=saved,
+                store_count=store_count,
+            )
+            logger.info(
+                "Job {} done — saved {} ads, storeCount={}",
+                job.id,
+                saved,
+                store_count,
+            )
+            return
 
         logger.info("Job {} done — saved {} ads", job.id, saved)
