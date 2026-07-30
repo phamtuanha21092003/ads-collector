@@ -25,10 +25,12 @@ class AdRepository:
                     "country": ad.country,
                     "raw": ad.raw,
                     "updatedAt": now,
+                    "shop": ad.shop
                 },
                 "$setOnInsert": {
                     "adId": ad.ad_id,
                     "createdAt": now,
+                    "qualifiedAdsCount": 0
                 },
             },
             upsert=True,
@@ -79,3 +81,20 @@ class AdRepository:
 
     async def count_by_job(self, job_id: ObjectId) -> int:
         return await self._collection.count_documents({"jobIds": job_id})
+
+    async def update_ads_qualified(
+        self,
+        parent_id: ObjectId,
+        count: int,
+        shop: str
+    ) -> None:
+        if count <= 0:
+            return
+        now = utc_now()
+        await self._collection.update_one(
+            {"jobIds": parent_id, shop: shop},
+            {
+                "$set": {"updatedAt": now, "qualifiedAdsCount": count},
+            },
+        )
+

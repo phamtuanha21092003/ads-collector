@@ -97,22 +97,6 @@ class JobRepository:
             fields["qualifiedAdsCount"] = qualified_ads_count
         await self._collection.update_one({"_id": job_id}, {"$set": fields})
 
-    async def increment_parent_qualified(
-        self,
-        parent_id: ObjectId,
-        count: int,
-    ) -> None:
-        if count <= 0:
-            return
-        now = utc_now()
-        await self._collection.update_one(
-            {"_id": parent_id},
-            {
-                "$inc": {"qualifiedAdsCount": count},
-                "$set": {"updatedAt": now},
-            },
-        )
-
     async def mark_failed(
         self,
         job_id: ObjectId,

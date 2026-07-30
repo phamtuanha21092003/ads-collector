@@ -316,7 +316,7 @@ class WorkerLoop:
             if existing is not None:
                 count = self._existing_qualified_count(existing)
                 if count > 0:
-                    await self._job_repo.increment_parent_qualified(parent.id, count)
+                    await self._ad_repo.update_ads_qualified(parent_id=parent.id, count=count, shop=domain)
                 logger.info(
                     "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
                     "→ parent {} (+{})",
@@ -381,6 +381,7 @@ class WorkerLoop:
             if creative is None:
                 return
 
+            domain: str | None = None
             link_url = creative.get("link_url")
             if not is_shopify_domain(link_url):
                 return
@@ -400,6 +401,7 @@ class WorkerLoop:
                 keywords=[job.keyword],
                 country=country,
                 raw=raw,
+                shop=domain,
             )
             asyncio.run_coroutine_threadsafe(
                 self._ad_repo.upsert_one(ad),
@@ -539,7 +541,8 @@ class WorkerLoop:
             )
             parent_id = self._parent_job_id(job.metadata)
             if parent_id is not None and saved > 0:
-                await self._job_repo.increment_parent_qualified(parent_id, saved)
+                shop = job.keyword
+                await self._ad_repo.update_ads_qualified(parent_id=parent_id, count=saved, shop=shop)
                 logger.info(
                     "Domain job {} qualifiedAdsCount={} → parent {}",
                     job.id,
