@@ -313,8 +313,6 @@ class WorkerLoop:
         start = end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
 
         for domain in sorted(domains):
-            await self._shop_repo.upsert_for_domain(domain, parent.id)
-
             existing = await self._job_repo.find_overlapping_domain_job(
                 domain, start, end
             )
@@ -324,7 +322,7 @@ class WorkerLoop:
                     await self._ad_repo.update_ads_qualified(
                         parent_id=parent.id, count=count, shop=domain
                     )
-                    await self._shop_repo.update_qualified_ads_count(domain, count)
+                    await self._shop_repo.update_qualified_ads_count(domain, count, job_id=parent.id)
                 logger.info(
                     "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
                     "→ parent {} (+{})",
@@ -554,7 +552,7 @@ class WorkerLoop:
                 await self._ad_repo.update_ads_qualified(
                     parent_id=parent_id, count=saved, shop=shop
                 )
-                await self._shop_repo.update_qualified_ads_count(shop, saved)
+                await self._shop_repo.update_qualified_ads_count(shop, saved, job_id=job.id)
                 logger.info(
                     "Domain job {} qualifiedAdsCount={} → parent {} shop={!r}",
                     job.id,
