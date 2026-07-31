@@ -38,7 +38,7 @@ class WorkerLoop:
         self._settings = settings
         self._job_repo = job_repo or JobRepository(jobs_collection(settings))
         self._ad_repo = ad_repo or AdRepository(ads_collection(settings))
-        self._shop_repo = shop_repo or ShopRepository(shops_collection(settings))
+        self._shop_repo = shop_repo or ShopRepository(shops_collection(settings), settings)
         self._meta = meta or MetaCollectorService()
         self._stopping = False
         self._channel: Channel | None = None

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     worker_id: str = "worker-1"
     default_country: str = "US"
     max_results_cap: int = 100000
+    trendtrack_api_key:str=''
+    trendtrack_api_url:str=''
 
 
 @lru_cache

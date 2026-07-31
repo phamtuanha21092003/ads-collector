@@ -1,29 +1,59 @@
+from typing import Any
+
 from bson import ObjectId
+import httpx
 from motor.motor_asyncio import AsyncIOMotorCollection
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.base.model_base import utc_now
+from app.config import Settings
 from app.model.job_model import JobStatus
 
 
+def _is_retryable_trendtrack_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.RequestError):
+        return True
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code == 429 or error.response.status_code >= 500
+    return False
+
+
 class ShopRepository:
-    def __init__(self, collection: AsyncIOMotorCollection) -> None:
+    def __init__(self, collection: AsyncIOMotorCollection, settings: Settings) -> None:
         self._collection = collection
+        self._settings = settings
 
     async def upsert_for_domain(self, shop: str, job_id: ObjectId) -> None:
+        existing_shop = await self._collection.find_one({"shop": shop})
         now = utc_now()
+
+        if existing_shop is None:
+            metadata = await self.get_shop(shop)
+            await self._collection.insert_one(
+                {
+                    "shop": shop,
+                    "updatedAt": now,
+                    "jobId": job_id,
+                    "lastAdsUpdatedAt": now,
+                    "status": JobStatus.RUNNING.value,
+                    "qualifiedAdsCount": 0,
+                    "createdAt": now,
+                    "metadata": metadata,
+                }
+            )
+            return
+
         await self._collection.update_one(
             {"shop": shop},
             {
                 "$addToSet": {"jobIds": job_id},
-                "$set": {"updatedAt": now, "jobId": job_id, "lastAdsUpdatedAt": now, "status": JobStatus.RUNNING.value},
-                "$setOnInsert": {
-                    "shop": shop,
-                    "createdAt": now,
-                    "metadata": {},
-                    "qualifiedAdsCount": 0
+                "$set": {
+                    "updatedAt": now,
+                    "jobId": job_id,
+                    "lastAdsUpdatedAt": now,
+                    "status": JobStatus.RUNNING.value,
                 },
             },
-            upsert=True,
         )
 
     async def update_qualified_ads_count(
@@ -44,12 +74,29 @@ class ShopRepository:
         }
 
         if job_id is not None:
-            update["$addToSet"] = {
-                "jobIds": job_id,
-            }
+            update["$addToSet"] = {"jobIds": job_id}
             update["$set"]["jobId"] = job_id
 
-        await self._collection.update_one(
-            {"shop": shop},
-            update,
-        )
+        await self._collection.update_one({"shop": shop}, update)
+
+    async def get_shop(self, shop: str) -> dict[str, Any] | None:
+        return await self._get_shop_with_retry(shop)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        retry=retry_if_exception(_is_retryable_trendtrack_error),
+    )
+    async def _get_shop_with_retry(self, shop: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{self._settings.trendtrack_api_url}/shops",
+                params={"searchType": "domain", "search": shop},
+                headers={"Authorization": self._settings.trendtrack_api_key},
+            )
+        response.raise_for_status()
+
+        payload = response.json()
+        shops = payload.get("data", []) if isinstance(payload, dict) else []
+        return shops[0] if shops else None
