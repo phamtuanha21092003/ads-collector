@@ -33,4 +33,9 @@ class ShopModel(MongoBaseModel):
         validation_alias="qualifiedAdsCount",
     )
     status: JobStatus = JobStatus.RUNNING
+    last_ads_updated_at: int | None = Field(
+            default=None,
+            serialization_alias="lastShopUpdatedAt",
+            validation_alias="lastShopUpdatedAt",
+    )
 

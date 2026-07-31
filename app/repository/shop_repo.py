@@ -39,6 +39,7 @@ class ShopRepository:
                     "qualifiedAdsCount": 0,
                     "createdAt": now,
                     "metadata": metadata,
+                    "lastShopUpdatedAt": now,
                 }
             )
             return
