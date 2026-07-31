@@ -18,6 +18,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 OnAdCallback = Callable[[dict[str, Any]], None]
 
 
+class ReachThresholdReached(Exception):
+    """Raised from on_ad when mustReach / storeMustReach is satisfied."""
+
+
 class MetaCollectorService:
     def __init__(self, proxy_pool: ProxyPool | None = None) -> None:
         self._proxy_pool = proxy_pool
@@ -83,17 +87,24 @@ class MetaCollectorService:
     ) -> int:
         count = 0
         with MetaAdsCollector(timeout=180, proxy=self._proxy_pool) as collector:
-            for ad in collector.search(
-                status=status_filter or "ALL",
-                query=keyword,
-                country=country,
-                max_results=max_results,
-                filter_config=filter_config,
-                page_size=1000
-            ):
-                raw = ad.to_dict()
-                if on_ad is not None:
-                    on_ad(raw)
-                count += 1
+            try:
+                for ad in collector.search(
+                    status=status_filter or "ALL",
+                    query=keyword,
+                    country=country,
+                    max_results=max_results,
+                    filter_config=filter_config,
+                    page_size=1000,
+                ):
+                    raw = ad.to_dict()
+                    if on_ad is not None:
+                        on_ad(raw)
+                    count += 1
+            except ReachThresholdReached as exc:
+                logger.info(
+                    "Stopped Meta search early for keyword={!r}: {}",
+                    keyword,
+                    exc,
+                )
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count

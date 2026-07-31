@@ -27,8 +27,6 @@ class ShopRepository:
         existing_shop = await self._collection.find_one({"shop": shop})
         now = utc_now()
 
-        print("shop ", shop)
-
         metadata = None
         error = None
 
@@ -114,10 +112,9 @@ class ShopRepository:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
                 f"{self._settings.trendtrack_api_url}/shops",
-                params={"searchType": "domain", "search": shop},
-                headers={"Authorization": "Bearer {self._settings.trendtrack_api_key}"},
+                params={"searchType": "domain", "search": shop.removeprefix("www.")},
+                headers={"Authorization": f"Bearer {self._settings.trendtrack_api_key}"},
             )
-        print("Bearer {self._settings.trendtrack_api_key}")
         response.raise_for_status()
 
         payload = response.json()

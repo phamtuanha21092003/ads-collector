@@ -20,11 +20,10 @@ from app.mq import RETRY_COUNT_HEADER, declare_jobs_queue
 from app.repository.ad_repo import AdRepository
 from app.repository.job_repo import JobRepository
 from app.repository.shop_repo import ShopRepository
-from app.service.meta_collector import MetaCollectorService
+from app.service.meta_collector import MetaCollectorService, ReachThresholdReached
 from app.util.shopify_util import extract_domain, is_shopify_domain
 
 DOMAIN_WINDOW_DAYS = 30
-MUST_REACH_EMPTY_WINDOWS_LIMIT = 3
 
 
 class WorkerLoop:
@@ -263,6 +262,7 @@ class WorkerLoop:
                 or self._settings.max_results_cap,
                 "statusFilter": payload.get("statusFilter") or "ALL",
                 "mustReach": payload.get("mustReach") or 0,
+                "storeMustReach": payload.get("storeMustReach") or 0,
                 "metadata": payload.get("metadata"),
             }
         )
@@ -344,6 +344,7 @@ class WorkerLoop:
                 max_results=parent.max_results,
                 user_id=parent.user_id,
                 status_filter=parent.status_filter,
+                must_reach=parent.must_reach,
                 metadata={"parentJobId": str(parent.id)},
             )
             child = await self._job_repo.create_pending(child)
@@ -374,6 +375,8 @@ class WorkerLoop:
         assert job.id is not None
         loop = asyncio.get_running_loop()
         new_saved = 0
+        must_reach = int(job.must_reach or 0)
+        store_must_reach = int(job.store_must_reach or 0)
 
         def on_ad(raw: dict[str, Any]) -> None:
             nonlocal new_saved
@@ -432,6 +435,21 @@ class WorkerLoop:
             if total == 1 or total % 10 == 0:
                 logger.info("Job {} saved {} ads so far", job.id, total)
 
+            if must_reach > 0 and total > must_reach:
+                raise ReachThresholdReached(
+                    f"ads {total} > mustReach {must_reach}"
+                )
+            if (
+                collect_domains
+                and store_must_reach > 0
+                and pending_domains is not None
+                and len(pending_domains) > store_must_reach
+            ):
+                raise ReachThresholdReached(
+                    f"stores {len(pending_domains)} > "
+                    f"storeMustReach {store_must_reach}"
+                )
+
         fetched = await asyncio.to_thread(
             self._meta.search,
             keyword=job.keyword,
@@ -453,79 +471,17 @@ class WorkerLoop:
     ) -> tuple[int, int]:
         pending_domains: set[str] = set()
         seen_ad_ids: set[str] = set()
-        must_reach = int(job.must_reach or 0)
 
-        if must_reach <= 0:
-            await self._search_window(
-                job=job,
-                start_date=job.start_date,
-                end_date=job.end_date,
-                country=country,
-                max_results=max_results,
-                seen_ad_ids=seen_ad_ids,
-                pending_domains=pending_domains,
-                collect_domains=True,
-            )
-        else:
-            window_end = date.today()
-            window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
-            empty_windows = 0
-            while True:
-                logger.info(
-                    "Job {} mustReach={} window {} → {} "
-                    "(saved={}, emptyWindows={}/{})",
-                    job.id,
-                    must_reach,
-                    window_start,
-                    window_end,
-                    len(seen_ad_ids),
-                    empty_windows,
-                    MUST_REACH_EMPTY_WINDOWS_LIMIT,
-                )
-                _new_saved, fetched = await self._search_window(
-                    job=job,
-                    start_date=window_start,
-                    end_date=window_end,
-                    country=country,
-                    max_results=max_results,
-                    seen_ad_ids=seen_ad_ids,
-                    pending_domains=pending_domains,
-                    collect_domains=True,
-                )
-                saved = len(seen_ad_ids)
-                if saved > must_reach:
-                    logger.info(
-                        "Job {} reached mustReach ({} > {})",
-                        job.id,
-                        saved,
-                        must_reach,
-                    )
-                    break
-
-                if fetched == 0:
-                    empty_windows += 1
-                    logger.info(
-                        "Job {} mustReach empty Meta window {} → {} "
-                        "({}/{})",
-                        job.id,
-                        window_start,
-                        window_end,
-                        empty_windows,
-                        MUST_REACH_EMPTY_WINDOWS_LIMIT,
-                    )
-                    if empty_windows >= MUST_REACH_EMPTY_WINDOWS_LIMIT:
-                        logger.info(
-                            "Job {} mustReach stop — {} consecutive "
-                            "empty Meta windows",
-                            job.id,
-                            empty_windows,
-                        )
-                        break
-                else:
-                    empty_windows = 0
-
-                window_end = window_start - timedelta(days=1)
-                window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
+        await self._search_window(
+            job=job,
+            start_date=job.start_date,
+            end_date=job.end_date,
+            country=country,
+            max_results=max_results,
+            seen_ad_ids=seen_ad_ids,
+            pending_domains=pending_domains,
+            collect_domains=True,
+        )
 
         if pending_domains:
             await self._spawn_domain_jobs(job, pending_domains)

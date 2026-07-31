@@ -74,6 +74,11 @@ class JobModel(MongoBaseModel):
         serialization_alias="mustReach",
         validation_alias="mustReach",
     )
+    store_must_reach: int = Field(
+        default=0,
+        serialization_alias="storeMustReach",
+        validation_alias="storeMustReach",
+    )
     qualified_ads_count: int | None = Field(
         default=None,
         serialization_alias="qualifiedAdsCount",
