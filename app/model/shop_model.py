@@ -38,4 +38,5 @@ class ShopModel(MongoBaseModel):
             serialization_alias="lastShopUpdatedAt",
             validation_alias="lastShopUpdatedAt",
     )
+    error: dict[str, any]
 

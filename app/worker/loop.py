@@ -24,6 +24,7 @@ from app.service.meta_collector import MetaCollectorService
 from app.util.shopify_util import extract_domain, is_shopify_domain
 
 DOMAIN_WINDOW_DAYS = 30
+MUST_REACH_EMPTY_WINDOWS_LIMIT = 3
 
 
 class WorkerLoop:
@@ -369,8 +370,7 @@ class WorkerLoop:
         seen_ad_ids: set[str],
         pending_domains: set[str] | None,
         collect_domains: bool,
-    ) -> int:
-        """Run one Meta search window. Returns number of newly saved ads."""
+    ) -> tuple[int, int]:
         assert job.id is not None
         loop = asyncio.get_running_loop()
         new_saved = 0
@@ -388,15 +388,27 @@ class WorkerLoop:
             if creative is None:
                 return
 
-            domain: str | None = None
             link_url = creative.get("link_url")
-            if not is_shopify_domain(link_url):
+            if not isinstance(link_url, str) or not link_url:
                 return
 
-            if collect_domains and pending_domains is not None:
-                domain = extract_domain(link_url)
-                if domain:
-                    pending_domains.add(domain)
+            link_domain = extract_domain(link_url)
+            if not link_domain:
+                return
+
+            if collect_domains:
+                if not is_shopify_domain(link_url):
+                    return
+                if pending_domains is not None:
+                    pending_domains.add(link_domain)
+                shop = link_domain
+            else:
+                target = job.keyword.strip().lower().rstrip(".")
+                if link_domain != target and not link_domain.endswith(
+                    f".{target}"
+                ):
+                    return
+                shop = target
 
             ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
             if not ad_id or ad_id in seen_ad_ids:
@@ -408,7 +420,7 @@ class WorkerLoop:
                 keywords=[job.keyword],
                 country=country,
                 raw=raw,
-                shop=domain,
+                shop=shop,
             )
             asyncio.run_coroutine_threadsafe(
                 self._ad_repo.upsert_one(ad),
@@ -420,7 +432,7 @@ class WorkerLoop:
             if total == 1 or total % 10 == 0:
                 logger.info("Job {} saved {} ads so far", job.id, total)
 
-        await asyncio.to_thread(
+        fetched = await asyncio.to_thread(
             self._meta.search,
             keyword=job.keyword,
             start_date=start_date,
@@ -430,7 +442,7 @@ class WorkerLoop:
             on_ad=on_ad,
             status_filter=job.status_filter,
         )
-        return new_saved
+        return new_saved, fetched
 
     async def _process_keyword_job(
         self,
@@ -457,17 +469,20 @@ class WorkerLoop:
         else:
             window_end = date.today()
             window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
+            empty_windows = 0
             while True:
-                before = len(seen_ad_ids)
                 logger.info(
-                    "Job {} mustReach={} window {} → {} (saved={})",
+                    "Job {} mustReach={} window {} → {} "
+                    "(saved={}, emptyWindows={}/{})",
                     job.id,
                     must_reach,
                     window_start,
                     window_end,
-                    before,
+                    len(seen_ad_ids),
+                    empty_windows,
+                    MUST_REACH_EMPTY_WINDOWS_LIMIT,
                 )
-                await self._search_window(
+                _new_saved, fetched = await self._search_window(
                     job=job,
                     start_date=window_start,
                     end_date=window_end,
@@ -478,7 +493,6 @@ class WorkerLoop:
                     collect_domains=True,
                 )
                 saved = len(seen_ad_ids)
-                new_saved = saved - before
                 if saved > must_reach:
                     logger.info(
                         "Job {} reached mustReach ({} > {})",
@@ -487,14 +501,29 @@ class WorkerLoop:
                         must_reach,
                     )
                     break
-                if new_saved == 0:
+
+                if fetched == 0:
+                    empty_windows += 1
                     logger.info(
-                        "Job {} mustReach stop — no new ads in window {} → {}",
+                        "Job {} mustReach empty Meta window {} → {} "
+                        "({}/{})",
                         job.id,
                         window_start,
                         window_end,
+                        empty_windows,
+                        MUST_REACH_EMPTY_WINDOWS_LIMIT,
                     )
-                    break
+                    if empty_windows >= MUST_REACH_EMPTY_WINDOWS_LIMIT:
+                        logger.info(
+                            "Job {} mustReach stop — {} consecutive "
+                            "empty Meta windows",
+                            job.id,
+                            empty_windows,
+                        )
+                        break
+                else:
+                    empty_windows = 0
+
                 window_end = window_start - timedelta(days=1)
                 window_start = window_end - timedelta(days=DOMAIN_WINDOW_DAYS - 1)
 

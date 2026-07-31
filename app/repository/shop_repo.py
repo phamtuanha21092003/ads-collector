@@ -27,8 +27,25 @@ class ShopRepository:
         existing_shop = await self._collection.find_one({"shop": shop})
         now = utc_now()
 
-        if existing_shop is None:
+        print("shop ", shop)
+
+        metadata = None
+        error = None
+
+        try:
             metadata = await self.get_shop(shop)
+        except httpx.HTTPStatusError as e:
+            error = {
+                "statusCode": e.response.status_code,
+                "message": str(e),
+                "response": e.response.text,
+            }
+        except httpx.HTTPError as e:
+            error = {
+                "message": str(e),
+            }
+
+        if existing_shop is None:
             await self._collection.insert_one(
                 {
                     "shop": shop,
@@ -39,7 +56,9 @@ class ShopRepository:
                     "qualifiedAdsCount": 0,
                     "createdAt": now,
                     "metadata": metadata,
+                    "error": error,
                     "lastShopUpdatedAt": now,
+                    "jobIds": [job_id],
                 }
             )
             return
@@ -47,7 +66,9 @@ class ShopRepository:
         await self._collection.update_one(
             {"shop": shop},
             {
-                "$addToSet": {"jobIds": job_id},
+                "$addToSet": {
+                    "jobIds": job_id,
+                },
                 "$set": {
                     "updatedAt": now,
                     "jobId": job_id,
@@ -94,8 +115,9 @@ class ShopRepository:
             response = await client.get(
                 f"{self._settings.trendtrack_api_url}/shops",
                 params={"searchType": "domain", "search": shop},
-                headers={"Authorization": self._settings.trendtrack_api_key},
+                headers={"Authorization": "Bearer {self._settings.trendtrack_api_key}"},
             )
+        print("Bearer {self._settings.trendtrack_api_key}")
         response.raise_for_status()
 
         payload = response.json()
