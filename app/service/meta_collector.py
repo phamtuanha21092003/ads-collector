@@ -96,7 +96,7 @@ class MetaCollectorService:
                     country=country,
                     max_results=max_results,
                     filter_config=filter_config,
-                    page_size=1000,
+                    page_size=30,
                 ):
                     raw = ad.to_dict()
                     if on_ad is not None:
