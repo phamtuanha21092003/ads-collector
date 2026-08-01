@@ -349,7 +349,7 @@ class WorkerLoop:
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
-            await self._shop_repo.upsert_for_domain(domain, child.id)
+            await self._shop_repo.upsert_for_domain(domain, parent.id)
             await self._publish_job(child.id)
             logger.info(
                 "Spawned domain job {} keyword={!r} {} → {} from parent {}",
