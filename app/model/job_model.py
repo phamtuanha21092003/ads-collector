@@ -90,3 +90,8 @@ class JobModel(MongoBaseModel):
         validation_alias="storeCount",
     )
     metadata: dict[str, Any] | None = None
+    media_type: str | None = Field(
+        default=None,
+        serialization_alias="mediaType",
+        validation_alias="mediaType",
+    )

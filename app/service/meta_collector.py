@@ -34,12 +34,14 @@ class MetaCollectorService:
         end_date: date,
         country: str,
         status_filter: str | None = None,
+        media_type: str | None = None,
         max_results: int | None = None,
         on_ad: OnAdCallback | None = None,
     ) -> int:
         filter_config = FilterConfig(
             start_date=datetime.combine(start_date, time.min),
             end_date=datetime.combine(end_date, time.max),
+            media_type=media_type
         )
         logger.info(
             "Searching Meta ads keyword={!r} country={} start={} end={} "

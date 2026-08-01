@@ -264,6 +264,7 @@ class WorkerLoop:
                 "mustReach": payload.get("mustReach") or 0,
                 "storeMustReach": payload.get("storeMustReach") or 0,
                 "metadata": payload.get("metadata"),
+                "mediaType": payload.get("mediaType")
             }
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
@@ -345,6 +346,7 @@ class WorkerLoop:
                 user_id=parent.user_id,
                 status_filter=parent.status_filter,
                 must_reach=parent.must_reach,
+                media_type=parent.media_type,
                 metadata={"parentJobId": str(parent.id)},
             )
             child = await self._job_repo.create_pending(child)
@@ -456,6 +458,7 @@ class WorkerLoop:
             start_date=start_date,
             end_date=end_date,
             country=country,
+            media_type=job.media_type,
             max_results=max_results,
             on_ad=on_ad,
             status_filter=job.status_filter,
