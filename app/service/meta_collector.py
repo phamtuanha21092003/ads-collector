@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
 from datetime import date, datetime, time
 from typing import Any
@@ -15,7 +16,11 @@ from meta_ads_collector import (
 )
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from app.service.proxy_scrape import ProxyScrapeService
+
 OnAdCallback = Callable[[dict[str, Any]], None]
+
+META_PAGE_SIZE = 30
 
 
 class ReachThresholdReached(Exception):
@@ -23,8 +28,16 @@ class ReachThresholdReached(Exception):
 
 
 class MetaCollectorService:
-    def __init__(self, proxy_pool: ProxyPool | None = None) -> None:
+    def __init__(
+        self,
+        proxy_pool: ProxyPool | None = None,
+        *,
+        proxy_scrape: ProxyScrapeService | None = None,
+        fallback_proxies: list[str] | None = None,
+    ) -> None:
         self._proxy_pool = proxy_pool
+        self._proxy_scrape = proxy_scrape
+        self._fallback_proxies = list(fallback_proxies or [])
 
     def search(
         self,
@@ -41,17 +54,17 @@ class MetaCollectorService:
         filter_config = FilterConfig(
             start_date=datetime.combine(start_date, time.min),
             end_date=datetime.combine(end_date, time.max),
-            media_type=media_type
+            media_type=media_type,
         )
         logger.info(
             "Searching Meta ads keyword={!r} country={} start={} end={} "
-            "max_results={} proxy={}",
+            "max_results={} proxy_source={}",
             keyword,
             country,
             start_date,
             end_date,
             max_results,
-            "rotation" if self._proxy_pool is not None else "none",
+            self._proxy_source_label(),
         )
         return self._search_with_retry(
             keyword=keyword,
@@ -61,6 +74,49 @@ class MetaCollectorService:
             on_ad=on_ad,
             status_filter=status_filter,
         )
+
+    def _proxy_source_label(self) -> str:
+        if self._proxy_scrape is not None and self._proxy_scrape.enabled:
+            return "proxyscrape-random"
+        if self._fallback_proxies:
+            return "fallback-random"
+        if self._proxy_pool is not None and len(self._proxy_pool) > 0:
+            return "mongo-random"
+        return "none"
+
+    def _proxy_candidates(self) -> list[str]:
+        if self._proxy_scrape is not None and self._proxy_scrape.enabled:
+            scraped = self._proxy_scrape.get_proxies()
+            if scraped:
+                return scraped
+
+        if self._fallback_proxies:
+            return list(self._fallback_proxies)
+
+        if self._proxy_pool is not None and len(self._proxy_pool) > 0:
+            return list(self._proxy_pool.alive_proxies)
+
+        return []
+
+    def _random_proxy_for_search(self) -> ProxyPool | str | None:
+        candidates = self._proxy_candidates()
+        if not candidates:
+            return None
+
+        shuffled = list(candidates)
+        random.shuffle(shuffled)
+        try:
+            pool = ProxyPool(shuffled)
+        except ProxyError as exc:
+            logger.warning("Failed to build random ProxyPool: {}", exc)
+            return shuffled[0] if shuffled else None
+
+        logger.info(
+            "Random proxy rotation: first={!r} total={}",
+            shuffled[0],
+            len(shuffled),
+        )
+        return pool
 
     @retry(
         reraise=True,
@@ -87,8 +143,10 @@ class MetaCollectorService:
         filter_config: FilterConfig,
         on_ad: OnAdCallback | None,
     ) -> int:
+        # Shuffle again on every attempt so retries don't stick to a bad proxy.
+        active_proxy = self._random_proxy_for_search()
         count = 0
-        with MetaAdsCollector(timeout=180, proxy=self._proxy_pool) as collector:
+        with MetaAdsCollector(timeout=180, proxy=active_proxy) as collector:
             try:
                 for ad in collector.search(
                     status=status_filter or "ALL",
@@ -96,7 +154,7 @@ class MetaCollectorService:
                     country=country,
                     max_results=max_results,
                     filter_config=filter_config,
-                    page_size=30,
+                    page_size=META_PAGE_SIZE,
                 ):
                     raw = ad.to_dict()
                     if on_ad is not None:

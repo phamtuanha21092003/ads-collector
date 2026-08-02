@@ -12,6 +12,7 @@ from app.mq import close as close_mq
 from app.repository.system_config_repo import SystemConfigRepository
 from app.service.meta_collector import MetaCollectorService
 from app.service.proxy_rotation import ProxyRotationService
+from app.service.proxy_scrape import ProxyScrapeService
 from app.worker.loop import WorkerLoop
 
 
@@ -40,7 +41,23 @@ async def _async_main() -> None:
     await proxy_rotation.load_from_mongo(
         SystemConfigRepository(system_configs_collection(settings))
     )
-    meta = MetaCollectorService(proxy_pool=proxy_rotation.pool)
+    proxy_scrape = ProxyScrapeService(
+        url=settings.proxyscrape_url,
+        api_token=settings.proxyscrape_api_token,
+        cache_ttl_seconds=settings.proxyscrape_cache_ttl_seconds,
+    )
+    if proxy_scrape.enabled:
+        # Warm cache at startup so first search already has a pool.
+        proxy_scrape.get_proxies(force_refresh=True)
+    else:
+        logger.warning(
+            "PROXYSCRAPE_API_TOKEN empty — random ProxyScrape rotation disabled"
+        )
+
+    meta = MetaCollectorService(
+        proxy_pool=proxy_rotation.pool,
+        proxy_scrape=proxy_scrape,
+    )
     worker = WorkerLoop(settings, meta=meta)
     worker_task = asyncio.create_task(worker.run_forever(), name="ads-collector-worker")
     loop = asyncio.get_running_loop()

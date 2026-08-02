@@ -23,8 +23,17 @@ class Settings(BaseSettings):
     worker_id: str = "worker-1"
     default_country: str = "US"
     max_results_cap: int = 100000
-    trendtrack_api_key:str=''
-    trendtrack_api_url:str=''
+    trendtrack_api_key: str = ""
+    trendtrack_api_url: str = ""
+
+    # ProxyScrape (see index.py)
+    proxyscrape_url: str = (
+        "https://api.proxyscrape.com/v4/account/"
+        "35c69210-f8dd-4bed-9fd2-b86510b3ed28/"
+        "datacenter_shared/proxy-list"
+    )
+    proxyscrape_api_token: str = ""
+    proxyscrape_cache_ttl_seconds: float = 300.0
 
 
 @lru_cache
