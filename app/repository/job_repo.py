@@ -77,6 +77,23 @@ class JobRepository:
         )
         return JobModel.from_mongo(doc)
 
+    async def update_progress(
+        self,
+        job_id: ObjectId,
+        *,
+        ads_count: int | None = None,
+        store_count: int | None = None,
+    ) -> None:
+        ops: dict = {"$set": {"updatedAt": utc_now()}}
+        max_fields: dict = {}
+        if ads_count is not None:
+            max_fields["adsCount"] = ads_count
+        if store_count is not None:
+            max_fields["storeCount"] = store_count
+        if max_fields:
+            ops["$max"] = max_fields
+        await self._collection.update_one({"_id": job_id}, ops)
+
     async def mark_done(
         self,
         job_id: ObjectId,

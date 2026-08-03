@@ -4,6 +4,7 @@ import random
 from collections.abc import Callable
 from datetime import date, datetime, time
 from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from loguru import logger
 from meta_ads_collector import (
@@ -21,6 +22,9 @@ from app.service.proxy_scrape import ProxyScrapeService
 OnAdCallback = Callable[[dict[str, Any]], None]
 
 META_PAGE_SIZE = 30
+
+
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 class ReachThresholdReached(Exception):
@@ -118,6 +122,42 @@ class MetaCollectorService:
         )
         return pool
 
+    @staticmethod
+    def _raise_if_failed(futures: list[Future[None]]) -> None:
+        """Re-raise the first callback error (incl. ReachThresholdReached)."""
+        pending: list[Future[None]] = []
+        first_error: BaseException | None = None
+        for future in futures:
+            if not future.done():
+                pending.append(future)
+                continue
+            exc = future.exception()
+            if exc is not None and first_error is None:
+                first_error = exc
+        futures[:] = pending
+        if first_error is not None:
+            raise first_error
+
+    @staticmethod
+    def _wait_callbacks(futures: list[Future[None]]) -> None:
+        """Wait for in-flight on_ad work; prefer ReachThresholdReached."""
+        threshold: ReachThresholdReached | None = None
+        other: BaseException | None = None
+        for future in futures:
+            try:
+                future.result()
+            except ReachThresholdReached as exc:
+                if threshold is None:
+                    threshold = exc
+            except BaseException as exc:  # noqa: BLE001 — surface to caller
+                if other is None:
+                    other = exc
+        futures.clear()
+        if threshold is not None:
+            raise threshold
+        if other is not None:
+            raise other
+
     @retry(
         reraise=True,
         stop=stop_after_attempt(3),
@@ -143,9 +183,9 @@ class MetaCollectorService:
         filter_config: FilterConfig,
         on_ad: OnAdCallback | None,
     ) -> int:
-        # Shuffle again on every attempt so retries don't stick to a bad proxy.
         active_proxy = self._random_proxy_for_search()
         count = 0
+        futures: list[Future[None]] = []
         with MetaAdsCollector(timeout=180, proxy=active_proxy) as collector:
             try:
                 for ad in collector.search(
@@ -156,15 +196,28 @@ class MetaCollectorService:
                     filter_config=filter_config,
                     page_size=META_PAGE_SIZE,
                 ):
+                    if futures:
+                        self._raise_if_failed(futures)
                     raw = ad.to_dict()
                     if on_ad is not None:
-                        on_ad(raw)
+                        futures.append(_executor.submit(on_ad, raw))
                     count += 1
+                self._wait_callbacks(futures)
             except ReachThresholdReached as exc:
+                try:
+                    self._wait_callbacks(futures)
+                except ReachThresholdReached:
+                    pass
                 logger.info(
                     "Stopped Meta search early for keyword={!r}: {}",
                     keyword,
                     exc,
                 )
+            except BaseException:
+                try:
+                    self._wait_callbacks(futures)
+                except BaseException:
+                    pass
+                raise
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count

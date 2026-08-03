@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import date, timedelta
 from typing import Any
 
@@ -362,6 +363,19 @@ class WorkerLoop:
                 parent.id,
             )
 
+    async def _publish_keyword_progress(
+        self,
+        job_id: ObjectId,
+        *,
+        ads_count: int,
+        store_count: int,
+    ) -> None:
+        await self._job_repo.update_progress(
+            job_id,
+            ads_count=ads_count,
+            store_count=store_count,
+        )
+
     async def _search_window(
         self,
         *,
@@ -373,12 +387,17 @@ class WorkerLoop:
         seen_ad_ids: set[str],
         pending_domains: set[str] | None,
         collect_domains: bool,
+        spawn_domains_immediately: bool = False,
     ) -> tuple[int, int]:
         assert job.id is not None
         loop = asyncio.get_running_loop()
         new_saved = 0
         must_reach = int(job.must_reach or 0)
         store_must_reach = int(job.store_must_reach or 0)
+        spawned_domains: set[str] = set()
+        # meta_collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
+        # Guard all shared mutable state + check-then-act spawn/upsert logic.
+        state_lock = threading.Lock()
 
         def on_ad(raw: dict[str, Any]) -> None:
             nonlocal new_saved
@@ -401,22 +420,71 @@ class WorkerLoop:
             if not link_domain:
                 return
 
-            if collect_domains:
-                if not is_shopify_domain(link_url):
-                    return
-                if pending_domains is not None:
-                    pending_domains.add(link_domain)
-                shop = link_domain
-            else:
-                target = job.keyword.strip().lower().rstrip(".")
-                if link_domain != target and not link_domain.endswith(
-                    f".{target}"
-                ):
-                    return
-                shop = target
+            with state_lock:
+                is_new_domain = False
+                if collect_domains:
+                    if not is_shopify_domain(link_url):
+                        return
+                    if pending_domains is not None:
+                        is_new_domain = link_domain not in pending_domains
+                        pending_domains.add(link_domain)
+                    shop = link_domain
+                else:
+                    target = job.keyword.strip().lower().rstrip(".")
+                    if link_domain != target and not link_domain.endswith(
+                        f".{target}"
+                    ):
+                        return
+                    shop = target
 
-            ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
-            if not ad_id or ad_id in seen_ad_ids:
+                should_spawn = (
+                    spawn_domains_immediately
+                    and is_new_domain
+                    and link_domain not in spawned_domains
+                )
+                if should_spawn:
+                    spawned_domains.add(link_domain)
+
+                ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
+                is_duplicate_ad = not ad_id or ad_id in seen_ad_ids
+                if not is_duplicate_ad:
+                    seen_ad_ids.add(ad_id)
+                    new_saved += 1
+
+                total = len(seen_ad_ids)
+                store_total = (
+                    len(pending_domains) if pending_domains is not None else 0
+                )
+                refresh_store_only = (
+                    is_duplicate_ad
+                    and collect_domains
+                    and pending_domains is not None
+                    and is_new_domain
+                )
+
+            if should_spawn:
+                asyncio.run_coroutine_threadsafe(
+                    self._spawn_domain_jobs(job, {link_domain}),
+                    loop,
+                ).result()
+                logger.info(
+                    "Job {} discovered store {!r} — spawned domain job "
+                    "(stores={})",
+                    job.id,
+                    link_domain,
+                    store_total,
+                )
+
+            if is_duplicate_ad:
+                if refresh_store_only:
+                    asyncio.run_coroutine_threadsafe(
+                        self._publish_keyword_progress(
+                            job.id,
+                            ads_count=total,
+                            store_count=store_total,
+                        ),
+                        loop,
+                    ).result()
                 return
 
             ad = AdModel(
@@ -431,11 +499,23 @@ class WorkerLoop:
                 self._ad_repo.upsert_one(ad),
                 loop,
             ).result()
-            seen_ad_ids.add(ad_id)
-            new_saved += 1
-            total = len(seen_ad_ids)
-            if total == 1 or total % 10 == 0:
-                logger.info("Job {} saved {} ads so far", job.id, total)
+
+            asyncio.run_coroutine_threadsafe(
+                self._publish_keyword_progress(
+                    job.id,
+                    ads_count=total,
+                    store_count=store_total,
+                ),
+                loop,
+            ).result()
+
+            if total == 1 or total % 10 == 0 or is_new_domain:
+                logger.info(
+                    "Job {} progress — ads={} stores={}",
+                    job.id,
+                    total,
+                    store_total,
+                )
 
             if must_reach > 0 and total > must_reach:
                 raise ReachThresholdReached(
@@ -444,12 +524,10 @@ class WorkerLoop:
             if (
                 collect_domains
                 and store_must_reach > 0
-                and pending_domains is not None
-                and len(pending_domains) > store_must_reach
+                and store_total > store_must_reach
             ):
                 raise ReachThresholdReached(
-                    f"stores {len(pending_domains)} > "
-                    f"storeMustReach {store_must_reach}"
+                    f"stores {store_total} > storeMustReach {store_must_reach}"
                 )
 
         fetched = await asyncio.to_thread(
@@ -484,11 +562,14 @@ class WorkerLoop:
             seen_ad_ids=seen_ad_ids,
             pending_domains=pending_domains,
             collect_domains=True,
+            spawn_domains_immediately=True,
         )
 
-        if pending_domains:
-            await self._spawn_domain_jobs(job, pending_domains)
-
+        await self._publish_keyword_progress(
+            job.id,
+            ads_count=len(seen_ad_ids),
+            store_count=len(pending_domains),
+        )
         return len(seen_ad_ids), len(pending_domains)
 
     async def _process_domain_job(
