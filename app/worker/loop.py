@@ -325,7 +325,12 @@ class WorkerLoop:
                     await self._ad_repo.update_ads_qualified(
                         parent_id=parent.id, count=count, shop=domain
                     )
-                    await self._shop_repo.update_qualified_ads_count(domain, count, job_id=parent.id)
+                await self._shop_repo.update_qualified_ads_count(
+                    domain,
+                    count,
+                    job_id=existing.id,
+                    parent_job_id=parent.id,
+                )
                 logger.info(
                     "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
                     "→ parent {} (+{})",
@@ -352,7 +357,9 @@ class WorkerLoop:
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
-            await self._shop_repo.upsert_for_domain(domain, parent.id)
+            await self._shop_repo.upsert_for_domain(
+                domain, child.id, parent_job_id=parent.id
+            )
             await self._publish_job(child.id)
             logger.info(
                 "Spawned domain job {} keyword={!r} {} → {} from parent {}",
@@ -621,7 +628,12 @@ class WorkerLoop:
                 await self._ad_repo.update_ads_qualified(
                     parent_id=parent_id, count=saved, shop=shop
                 )
-                await self._shop_repo.update_qualified_ads_count(shop, saved, job_id=job.id)
+                await self._shop_repo.update_qualified_ads_count(
+                    shop,
+                    saved,
+                    job_id=job.id,
+                    parent_job_id=parent_id,
+                )
                 logger.info(
                     "Domain job {} qualifiedAdsCount={} → parent {} shop={!r}",
                     job.id,

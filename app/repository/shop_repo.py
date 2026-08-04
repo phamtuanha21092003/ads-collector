@@ -23,7 +23,13 @@ class ShopRepository:
         self._collection = collection
         self._settings = settings
 
-    async def upsert_for_domain(self, shop: str, job_id: ObjectId) -> None:
+    async def upsert_for_domain(
+        self,
+        shop: str,
+        domain_job_id: ObjectId,
+        *,
+        parent_job_id: ObjectId | None = None,
+    ) -> None:
         existing_shop = await self._collection.find_one({"shop": shop})
         now = utc_now()
 
@@ -43,12 +49,16 @@ class ShopRepository:
                 "message": str(e),
             }
 
+        job_ids = [domain_job_id]
+        if parent_job_id is not None:
+            job_ids.append(parent_job_id)
+
         if existing_shop is None:
             await self._collection.insert_one(
                 {
                     "shop": shop,
                     "updatedAt": now,
-                    "jobId": job_id,
+                    "jobId": domain_job_id,
                     "lastAdsUpdatedAt": now,
                     "status": JobStatus.RUNNING.value,
                     "qualifiedAdsCount": 0,
@@ -56,7 +66,7 @@ class ShopRepository:
                     "metadata": metadata,
                     "error": error,
                     "lastShopUpdatedAt": now,
-                    "jobIds": [job_id],
+                    "jobIds": job_ids,
                 }
             )
             return
@@ -65,11 +75,11 @@ class ShopRepository:
             {"shop": shop},
             {
                 "$addToSet": {
-                    "jobIds": job_id,
+                    "jobIds": {"$each": job_ids},
                 },
                 "$set": {
                     "updatedAt": now,
-                    "jobId": job_id,
+                    "jobId": domain_job_id,
                     "lastAdsUpdatedAt": now,
                     "status": JobStatus.RUNNING.value,
                 },
@@ -81,10 +91,12 @@ class ShopRepository:
         shop: str,
         count: int,
         job_id: ObjectId | None,
+        *,
+        parent_job_id: ObjectId | None = None,
     ) -> None:
         now = utc_now()
 
-        update = {
+        update: dict[str, Any] = {
             "$set": {
                 "qualifiedAdsCount": count,
                 "updatedAt": now,
@@ -93,9 +105,15 @@ class ShopRepository:
             }
         }
 
+        job_ids: list[ObjectId] = []
         if job_id is not None:
-            update["$addToSet"] = {"jobIds": job_id}
             update["$set"]["jobId"] = job_id
+            job_ids.append(job_id)
+        if parent_job_id is not None:
+            job_ids.append(parent_job_id)
+
+        if job_ids:
+            update["$addToSet"] = {"jobIds": {"$each": job_ids}}
 
         await self._collection.update_one({"shop": shop}, update)
 
