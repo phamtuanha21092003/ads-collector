@@ -190,7 +190,7 @@ class MetaCollectorService:
         active_proxy = self._random_proxy_for_search()
         count = 0
         futures: list[Future[None]] = []
-        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=3 as collector:
+        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=3) as collector:
             try:
                 for ad in collector.search(
                     status=status_filter or "ALL",
