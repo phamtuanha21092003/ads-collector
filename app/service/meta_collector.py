@@ -7,7 +7,7 @@ from typing import Any
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from loguru import logger
-from meta_ads_collector import (
+from libs.meta_ads_collector import (
     FilterConfig,
     MetaAdsCollector,
     ProxyError,
@@ -21,7 +21,7 @@ from app.service.proxy_scrape import ProxyScrapeService
 
 OnAdCallback = Callable[[dict[str, Any]], None]
 
-META_PAGE_SIZE = 30
+META_PAGE_SIZE = 1000
 
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -77,6 +77,8 @@ class MetaCollectorService:
             filter_config=filter_config,
             on_ad=on_ad,
             status_filter=status_filter,
+            start_date=start_date,
+            end_date=end_date
         )
 
     def _proxy_source_label(self) -> str:
@@ -182,11 +184,13 @@ class MetaCollectorService:
         max_results: int | None,
         filter_config: FilterConfig,
         on_ad: OnAdCallback | None,
+        start_date: str | None,
+        end_date: str | None,
     ) -> int:
         active_proxy = self._random_proxy_for_search()
         count = 0
         futures: list[Future[None]] = []
-        with MetaAdsCollector(timeout=180, proxy=active_proxy) as collector:
+        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=1) as collector:
             try:
                 for ad in collector.search(
                     status=status_filter or "ALL",
@@ -196,6 +200,7 @@ class MetaCollectorService:
                     filter_config=filter_config,
                     page_size=META_PAGE_SIZE,
                 ):
+                    print("have")
                     if futures:
                         self._raise_if_failed(futures)
                     raw = ad.to_dict()
