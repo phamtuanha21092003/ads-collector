@@ -190,7 +190,7 @@ class MetaCollectorService:
         active_proxy = self._random_proxy_for_search()
         count = 0
         futures: list[Future[None]] = []
-        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=1) as collector:
+        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=3 as collector:
             try:
                 for ad in collector.search(
                     status=status_filter or "ALL",
@@ -200,7 +200,6 @@ class MetaCollectorService:
                     filter_config=filter_config,
                     page_size=META_PAGE_SIZE,
                 ):
-                    print("have")
                     if futures:
                         self._raise_if_failed(futures)
                     raw = ad.to_dict()

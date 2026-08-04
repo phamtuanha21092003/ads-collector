@@ -488,8 +488,8 @@ class MetaAdsCollector:
                                 continue
 
                             # Apply client-side filters
-                            if filter_config is not None and not passes_filter(ad, filter_config):
-                                continue
+                            # if filter_config is not None and not passes_filter(ad, filter_config):
+                                # continue
 
                             collected += 1
                             self.stats["ads_collected"] += 1
