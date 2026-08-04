@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from loguru import logger
-from meta_ads_collector import ProxyPool
+from libs.meta_ads_collector import ProxyPool
 
 from app.model.system_config_model import PROXIES_ROTATION_META_KEY
 from app.repository.system_config_repo import SystemConfigRepository
