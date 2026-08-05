@@ -21,7 +21,7 @@ from app.service.proxy_scrape import ProxyScrapeService
 
 OnAdCallback = Callable[[dict[str, Any]], None]
 
-META_PAGE_SIZE = 1000
+META_PAGE_SIZE = 30
 
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -77,8 +77,8 @@ class MetaCollectorService:
             filter_config=filter_config,
             on_ad=on_ad,
             status_filter=status_filter,
-            start_date=start_date,
-            end_date=end_date
+            start_date=str(start_date),
+            end_date=str(end_date),
         )
 
     def _proxy_source_label(self) -> str:
@@ -199,6 +199,8 @@ class MetaCollectorService:
                     max_results=max_results,
                     filter_config=filter_config,
                     page_size=META_PAGE_SIZE,
+                    start_date=start_date,
+                    end_date=end_date,
                 ):
                     if futures:
                         self._raise_if_failed(futures)
