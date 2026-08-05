@@ -102,7 +102,7 @@ class MetaAdsCollector:
         max_retries: int = DEFAULT_MAX_RETRIES,
         callbacks: Optional[dict[str, Callable]] = None,
         cookies: Optional[Union[dict, str]] = None,
-        max_no_response: int = 50
+        max_no_response: int = 100,
     ):
         self.max_no_response = max_no_response
         self.current_no_response = 0
