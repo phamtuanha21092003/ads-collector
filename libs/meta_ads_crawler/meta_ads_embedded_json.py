@@ -100,7 +100,9 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
         "page_profile_uri": snapshot.get("page_profile_uri"),
         "page_profile_picture_url": snapshot.get("page_profile_picture_url"),
         "page_categories": snapshot.get("page_categories") or [],
-        "page_like_count": snapshot.get("page_like_count"),
+        "page": {
+            "likes": snapshot.get("page_like_count"),
+        },
         "title": card_or_snapshot("title"),
         "body": body,
         "cards": cards,
