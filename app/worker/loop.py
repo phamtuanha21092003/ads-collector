@@ -408,18 +408,10 @@ class WorkerLoop:
 
         def on_ad(raw: dict[str, Any]) -> None:
             nonlocal new_saved
-            creative: dict[str, Any] | None = next(
-                (
-                    c
-                    for c in raw.get("creatives", [])
-                    if c.get("cta_type") == "SHOP_NOW" and c.get("link_url")
-                ),
-                None,
-            )
-            if creative is None:
+            if not (raw.get("cta_type") == "SHOP_NOW" and raw.get("link_url")):
                 return
 
-            link_url = creative.get("link_url")
+            link_url = raw.get("link_url")
             if not isinstance(link_url, str) or not link_url:
                 return
 
@@ -452,7 +444,7 @@ class WorkerLoop:
                 if should_spawn:
                     spawned_domains.add(link_domain)
 
-                ad_id = str(raw.get("id") or raw.get("ad_library_id") or "")
+                ad_id = str(raw.get("ad_archive_id") or raw.get("id") or "")
                 is_duplicate_ad = not ad_id or ad_id in seen_ad_ids
                 if not is_duplicate_ad:
                     seen_ad_ids.add(ad_id)

@@ -5,6 +5,8 @@ from pymongo import UpdateOne
 from app.base.model_base import utc_now
 from app.model.ad_model import AdModel
 
+# THIS FIELD IS BREAKING CHANGE OF RAW DATA
+ADS_VERSION = 2
 
 class AdRepository:
     def __init__(self, collection: AsyncIOMotorCollection) -> None:
@@ -25,7 +27,8 @@ class AdRepository:
                     "country": ad.country,
                     "raw": ad.raw,
                     "updatedAt": now,
-                    "shop": ad.shop
+                    "shop": ad.shop,
+                    "version": ADS_VERSION
                 },
                 "$setOnInsert": {
                     "adId": ad.ad_id,
@@ -57,6 +60,7 @@ class AdRepository:
                             "country": ad.country,
                             "raw": ad.raw,
                             "updatedAt": now,
+                            "version": ADS_VERSION
                         },
                         "$setOnInsert": {
                             "adId": ad.ad_id,
