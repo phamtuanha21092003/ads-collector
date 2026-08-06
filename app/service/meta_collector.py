@@ -15,7 +15,13 @@ from libs.meta_ads_collector import (
     RateLimitError,
     SessionExpiredError,
 )
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from libs.meta_ads_crawler import MetaAdsCrawler
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.service.proxy_scrape import ProxyScrapeService
 
@@ -190,40 +196,38 @@ class MetaCollectorService:
         active_proxy = self._random_proxy_for_search()
         count = 0
         futures: list[Future[None]] = []
-        with MetaAdsCollector(timeout=180, proxy=active_proxy, rate_limit_delay=3) as collector:
+        try:
+            crawler = MetaAdsCrawler()
+            ads = crawler.search(
+                query=keyword,
+                country=country,
+                status=MetaAdsCrawler.STATUS_ALL,
+                max_results=max_results,
+                capture_duration_seconds=30,
+            )
+            for index, ad in enumerate(ads, start=1):
+                print(f"Ad {index}: {ad}")
+                if futures:
+                    self._raise_if_failed(futures)
+                if on_ad is not None:
+                    futures.append(_executor.submit(on_ad, ad))
+                count += 1
+            self._wait_callbacks(futures)
+        except ReachThresholdReached as exc:
             try:
-                for ad in collector.search(
-                    status=status_filter or "ALL",
-                    query=keyword,
-                    country=country,
-                    max_results=max_results,
-                    filter_config=filter_config,
-                    page_size=META_PAGE_SIZE,
-                    start_date=start_date,
-                    end_date=end_date,
-                ):
-                    if futures:
-                        self._raise_if_failed(futures)
-                    raw = ad.to_dict()
-                    if on_ad is not None:
-                        futures.append(_executor.submit(on_ad, raw))
-                    count += 1
                 self._wait_callbacks(futures)
-            except ReachThresholdReached as exc:
-                try:
-                    self._wait_callbacks(futures)
-                except ReachThresholdReached:
-                    pass
-                logger.info(
-                    "Stopped Meta search early for keyword={!r}: {}",
-                    keyword,
-                    exc,
-                )
+            except ReachThresholdReached:
+                pass
+            logger.info(
+                "Stopped Meta search early for keyword={!r}: {}",
+                keyword,
+                exc,
+            )
+        except BaseException:
+            try:
+                self._wait_callbacks(futures)
             except BaseException:
-                try:
-                    self._wait_callbacks(futures)
-                except BaseException:
-                    pass
-                raise
+                pass
+            raise
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count
