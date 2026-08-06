@@ -7,7 +7,6 @@ from datetime import date
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
-from httpx import options
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
@@ -15,8 +14,15 @@ from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
 
 
-def create_driver(headless: bool) -> webdriver.Chrome:
+def create_driver(
+    headless: bool,
+    proxy: str | None = None,
+) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
+    if proxy:
+        options.add_argument(f"--proxy-server={proxy}")
+    if headless:
+        print("Running Chrome in headless mode.")
     options.add_argument("--headless=false")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
@@ -99,6 +105,7 @@ class MetaAdsCrawler:
         capture_duration_seconds: float = 60,
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
+        proxy: str | None = None,
     ) -> list[dict[str, Any]]:
         """Capture Meta Ad Library responses and return normalized advertisements.
 
@@ -136,6 +143,7 @@ class MetaAdsCrawler:
             headless=False,
             auto_scroll=auto_scroll,
             scroll_interval_seconds=scroll_interval_seconds,
+            proxy=proxy,
         )
 
         ads_by_id: dict[str, dict[str, Any]] = {}
@@ -207,11 +215,12 @@ def capture_responses(
     headless: bool,
     auto_scroll: bool,
     scroll_interval_seconds: float,
+    proxy: str | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
     url_filter = "/api/graphql/"
 
-    active_driver = create_driver(headless)
+    active_driver = create_driver(proxy=proxy, headless=headless)
 
     request_details: dict[str, dict[str, Any]] = {}
     captured_response_bodies: list[str | dict[str, Any]] = []
