@@ -27,5 +27,4 @@ class AdModel(MongoBaseModel):
         serialization_alias="qualifiedAdsCount",
         validation_alias="qualifiedAdsCount",
     )
-    version: int
-    
+
