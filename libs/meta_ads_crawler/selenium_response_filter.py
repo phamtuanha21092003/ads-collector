@@ -9,6 +9,8 @@ from urllib.parse import parse_qsl, urlencode
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+
+from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
 
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
@@ -105,7 +107,7 @@ class MetaAdsCrawler:
         capture_duration_seconds: float = 60,
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
-        proxy: str | None = None,
+        proxy: str | ProxyPool | None = None,
     ) -> list[dict[str, Any]]:
         """Capture Meta Ad Library responses and return normalized advertisements.
 
@@ -215,18 +217,21 @@ def capture_responses(
     headless: bool,
     auto_scroll: bool,
     scroll_interval_seconds: float,
-    proxy: str | None = None,
+    proxy: str | ProxyPool | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
     url_filter = "/api/graphql/"
+    proxy_pool = proxy if isinstance(proxy, ProxyPool) else None
+    active_proxy = proxy_pool.get_next() if proxy_pool else proxy
 
-    active_driver = create_driver(proxy=proxy, headless=headless)
+    active_driver: webdriver.Chrome | None = None
 
     request_details: dict[str, dict[str, Any]] = {}
     captured_response_bodies: list[str | dict[str, Any]] = []
     seen_response_ids: set[str] = set()
 
     try:
+        active_driver = create_driver(proxy=active_proxy, headless=headless)
         active_driver.execute_cdp_cmd(
             "Network.enable",
             {
@@ -324,7 +329,15 @@ def capture_responses(
             time.sleep(0.1)
 
         print(f"capture {len(captured_response_bodies)} response.")
+        if proxy_pool and active_proxy:
+            proxy_pool.mark_success(active_proxy)
         return captured_response_bodies
 
+    except Exception:
+        if proxy_pool and active_proxy:
+            proxy_pool.mark_failure(active_proxy)
+        raise
+
     finally:
-        active_driver.quit()
+        if active_driver is not None:
+            active_driver.quit()

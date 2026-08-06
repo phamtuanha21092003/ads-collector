@@ -204,6 +204,7 @@ class MetaCollectorService:
                 status=MetaAdsCrawler.STATUS_ALL,
                 max_results=max_results,
                 capture_duration_seconds=30,
+                proxy=active_proxy,
             )
             for index, ad in enumerate(ads, start=1):
                 print(f"Ad {index}: {ad}")
