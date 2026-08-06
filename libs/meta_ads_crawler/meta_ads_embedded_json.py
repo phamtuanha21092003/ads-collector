@@ -69,16 +69,26 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         snapshot = {}
 
-    body = snapshot.get("body")
-    if not isinstance(body, dict):
-        body = {}
+    cards = snapshot.get("cards")
+    if not isinstance(cards, list):
+        cards = []
+    primary_card = next((card for card in cards if isinstance(card, dict)), {})
+
+    def card_or_snapshot(field: str) -> Any:
+        return primary_card.get(field) or snapshot.get(field)
+
+    body = card_or_snapshot("body")
+    if isinstance(body, dict):
+        body = body.get("text")
+    elif not isinstance(body, str):
+        body = None
 
     impression_data = ad.get("impressions_with_index")
     if not isinstance(impression_data, dict):
         impression_data = {}
 
-    raw_images = snapshot.get("images") or []
-    raw_videos = snapshot.get("videos") or []
+    raw_images = [primary_card] if primary_card else (snapshot.get("images") or [])
+    raw_videos = [primary_card] if primary_card else (snapshot.get("videos") or [])
 
     return {
         "ad_archive_id": ad.get("ad_archive_id"),
@@ -91,14 +101,15 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
         "page_profile_picture_url": snapshot.get("page_profile_picture_url"),
         "page_categories": snapshot.get("page_categories") or [],
         "page_like_count": snapshot.get("page_like_count"),
-        "title": snapshot.get("title"),
-        "body": body.get("text"),
-        "caption": snapshot.get("caption"),
-        "cta_text": snapshot.get("cta_text"),
-        "cta_type": snapshot.get("cta_type"),
+        "title": card_or_snapshot("title"),
+        "body": body,
+        "cards": cards,
+        "caption": card_or_snapshot("caption"),
+        "cta_text": card_or_snapshot("cta_text"),
+        "cta_type": card_or_snapshot("cta_type"),
         "display_format": snapshot.get("display_format"),
-        "link_url": snapshot.get("link_url"),
-        "link_description": snapshot.get("link_description"),
+        "link_url": card_or_snapshot("link_url"),
+        "link_description": card_or_snapshot("link_description"),
         "images": [
             extract_image(image) for image in raw_images if isinstance(image, dict)
         ],
@@ -107,9 +118,9 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
         ],
         "publisher_platform": ad.get("publisher_platform") or [],
         "start_timestamp": ad.get("start_date"),
-        "start_date": timestamp_to_iso(ad.get("start_date")),
+        "delivery_start_time": timestamp_to_iso(ad.get("start_date")),
         "end_timestamp": ad.get("end_date"),
-        "end_date": timestamp_to_iso(ad.get("end_date")),
+        "delivery_stop_time": timestamp_to_iso(ad.get("end_date")),
         "currency": ad.get("currency"),
         "spend": ad.get("spend"),
         "reach_estimate": ad.get("reach_estimate"),
