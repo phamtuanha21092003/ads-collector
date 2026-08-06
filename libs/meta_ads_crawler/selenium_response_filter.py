@@ -260,8 +260,8 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
-        if len(ads) == 0 and break_loop is not None:
-            break_loop()
+        # if len(ads) == 0 and break_loop is not None:
+        #     break_loop()
 
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
