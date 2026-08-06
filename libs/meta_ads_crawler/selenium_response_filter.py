@@ -241,8 +241,13 @@ def capture_responses(
     emitted_ad_ids: set[str] = set()
     callback_raised = False
     stop_check_raised = False
+    is_break = False
 
-    def emit_ads(response_body: str | dict[str, Any]) -> None:
+    def break_loop() -> None:
+        nonlocal is_break
+        is_break = True
+
+    def emit_ads(response_body: str | dict[str, Any], break_loop) -> None:
         """Invoke the callback once for each newly observed normalized ad."""
         nonlocal callback_raised
         if on_ad is None:
@@ -252,6 +257,9 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
+        if len(ads) == 0:
+            break_loop()
+
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
             if ad_id is None:
@@ -280,6 +288,7 @@ def capture_responses(
         active_driver.get(page_url)
         embedded_ads = getAds(active_driver)
         captured_response_bodies.extend(embedded_ads)
+
         for ad in embedded_ads:
             emit_ads(ad)
 
@@ -290,9 +299,9 @@ def capture_responses(
 
         started_at = time.monotonic()
         next_scroll_at = started_at + scroll_interval_seconds
-
         while (
-            duration_seconds is None
+            is_break is False
+            or duration_seconds is None
             or time.monotonic() - started_at < duration_seconds
         ):
             if stop_check is not None:
@@ -374,7 +383,8 @@ def capture_responses(
                 if response_body_filter and response_body_filter not in body_text:
                     continue
                 captured_response_bodies.append(body_text)
-                emit_ads(body_text)
+
+                emit_ads(body_text, break_loop)
                 print(f"Đã capture: {operation_hint or request_id}")
 
             time.sleep(0.1)
@@ -385,9 +395,7 @@ def capture_responses(
         return captured_response_bodies
 
     except Exception:
-        if proxy_pool and active_proxy and not (
-            callback_raised or stop_check_raised
-        ):
+        if proxy_pool and active_proxy and not (callback_raised or stop_check_raised):
             proxy_pool.mark_failure(active_proxy)
         raise
 
