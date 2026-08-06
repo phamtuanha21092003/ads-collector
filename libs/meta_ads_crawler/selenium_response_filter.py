@@ -207,9 +207,9 @@ class MetaAdsCrawler:
             "media_type": "all",
         }
         if start_date is not None:
-            parameters["start_date"] = start_date
+            parameters["start_date[min]"]= start_date
         if end_date is not None:
-            parameters["end_date"] = end_date
+            parameters["start_date[max]"] = end_date
         if filter_config:
             parameters.update(dict(parse_qsl(filter_config, keep_blank_values=True)))
         return AD_LIBRARY_URL + "?" + urlencode(parameters)
