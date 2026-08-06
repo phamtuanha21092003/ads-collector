@@ -402,8 +402,8 @@ class WorkerLoop:
         must_reach = int(job.must_reach or 0)
         store_must_reach = int(job.store_must_reach or 0)
         spawned_domains: set[str] = set()
-        # meta_collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
-        # Guard all shared mutable state + check-then-act spawn/upsert logic.
+        # Meta collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
+        # Guard all shared mutable state and check-then-act spawn/upsert logic.
         state_lock = threading.Lock()
 
         def on_ad(raw: dict[str, Any]) -> None:

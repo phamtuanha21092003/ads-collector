@@ -100,16 +100,21 @@ class MetaAdsCrawler:
         ad_type: str = AD_TYPE_ALL,
         status: str = STATUS_ACTIVE,
         max_results: int | None = None,
+        on_ad: Callable[[dict[str, Any]], None] | None = None,
+        stop_check: Callable[[], None] | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
         filter_config: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
-        capture_duration_seconds: float = 60,
+        capture_duration_seconds: float | None = 60,
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
         proxy: str | ProxyPool | None = None,
     ) -> list[dict[str, Any]]:
         """Capture Meta Ad Library responses and return normalized advertisements.
+
+        ``on_ad`` is invoked as soon as each new ad is parsed from an
+        embedded payload or captured GraphQL response.
 
         ``filter_config`` accepts additional URL query parameters, for example
         ``"media_type=video&search_type=keyword_exact_phrase"``.
@@ -123,7 +128,7 @@ class MetaAdsCrawler:
             raise ValueError(f"Unsupported status: {status}")
         if max_results is not None and max_results < 1:
             raise ValueError("max_results must be greater than zero")
-        if capture_duration_seconds <= 0:
+        if capture_duration_seconds is not None and capture_duration_seconds <= 0:
             raise ValueError("capture_duration_seconds must be greater than zero")
 
         self._validate_date(start_date, "start_date")
@@ -146,6 +151,8 @@ class MetaAdsCrawler:
             auto_scroll=auto_scroll,
             scroll_interval_seconds=scroll_interval_seconds,
             proxy=proxy,
+            on_ad=on_ad,
+            stop_check=stop_check,
         )
 
         ads_by_id: dict[str, dict[str, Any]] = {}
@@ -213,11 +220,13 @@ def capture_responses(
     mime_filter: str,
     request_body_filter: str,
     response_body_filter: str,
-    duration_seconds: float,
+    duration_seconds: float | None,
     headless: bool,
     auto_scroll: bool,
     scroll_interval_seconds: float,
     proxy: str | ProxyPool | None = None,
+    on_ad: Callable[[dict[str, Any]], None] | None = None,
+    stop_check: Callable[[], None] | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
     url_filter = "/api/graphql/"
@@ -229,6 +238,32 @@ def capture_responses(
     request_details: dict[str, dict[str, Any]] = {}
     captured_response_bodies: list[str | dict[str, Any]] = []
     seen_response_ids: set[str] = set()
+    emitted_ad_ids: set[str] = set()
+    callback_raised = False
+    stop_check_raised = False
+
+    def emit_ads(response_body: str | dict[str, Any]) -> None:
+        """Invoke the callback once for each newly observed normalized ad."""
+        nonlocal callback_raised
+        if on_ad is None:
+            return
+        ads = (
+            [response_body]
+            if isinstance(response_body, dict)
+            else extract_ads_from_scripts([response_body])
+        )
+        for ad in ads:
+            ad_id = ad.get("ad_archive_id")
+            if ad_id is None:
+                continue
+            normalized_id = str(ad_id)
+            if normalized_id not in emitted_ad_ids:
+                emitted_ad_ids.add(normalized_id)
+                try:
+                    on_ad(ad)
+                except Exception:
+                    callback_raised = True
+                    raise
 
     try:
         active_driver = create_driver(proxy=active_proxy, headless=headless)
@@ -243,14 +278,29 @@ def capture_responses(
 
         print(f"Open Page: {page_url}")
         active_driver.get(page_url)
-        captured_response_bodies.extend(getAds(active_driver))
+        embedded_ads = getAds(active_driver)
+        captured_response_bodies.extend(embedded_ads)
+        for ad in embedded_ads:
+            emit_ads(ad)
 
-        print(f"Duration_seconds {duration_seconds:g} seconds. ")
+        if duration_seconds is None:
+            print("Scroll until on_ad stops the crawl.")
+        else:
+            print(f"Duration_seconds {duration_seconds:g} seconds. ")
 
         started_at = time.monotonic()
         next_scroll_at = started_at + scroll_interval_seconds
 
-        while time.monotonic() - started_at < duration_seconds:
+        while (
+            duration_seconds is None
+            or time.monotonic() - started_at < duration_seconds
+        ):
+            if stop_check is not None:
+                try:
+                    stop_check()
+                except Exception:
+                    stop_check_raised = True
+                    raise
             now = time.monotonic()
 
             if auto_scroll and now >= next_scroll_at:
@@ -324,6 +374,7 @@ def capture_responses(
                 if response_body_filter and response_body_filter not in body_text:
                     continue
                 captured_response_bodies.append(body_text)
+                emit_ads(body_text)
                 print(f"Đã capture: {operation_hint or request_id}")
 
             time.sleep(0.1)
@@ -334,7 +385,9 @@ def capture_responses(
         return captured_response_bodies
 
     except Exception:
-        if proxy_pool and active_proxy:
+        if proxy_pool and active_proxy and not (
+            callback_raised or stop_check_raised
+        ):
             proxy_pool.mark_failure(active_proxy)
         raise
 

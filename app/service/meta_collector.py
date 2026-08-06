@@ -196,6 +196,19 @@ class MetaCollectorService:
         active_proxy = self._random_proxy_for_search()
         count = 0
         futures: list[Future[None]] = []
+
+        def handle_captured_ad(ad: dict[str, Any]) -> None:
+            """Dispatch each ad while its GraphQL response is being captured."""
+            nonlocal count
+            if on_ad is None:
+                return
+            if max_results is not None and count >= max_results:
+                return
+            if futures:
+                self._raise_if_failed(futures)
+            futures.append(_executor.submit(on_ad, ad))
+            count += 1
+
         try:
             crawler = MetaAdsCrawler()
             ads = crawler.search(
@@ -203,16 +216,19 @@ class MetaCollectorService:
                 country=country,
                 status=MetaAdsCrawler.STATUS_ALL,
                 max_results=max_results,
-                capture_duration_seconds=30,
+                start_date=start_date,
+                end_date=end_date,
+                capture_duration_seconds=None if on_ad is not None else 30,
                 proxy=active_proxy,
+                on_ad=handle_captured_ad if on_ad is not None else None,
+                stop_check=(
+                    (lambda: self._raise_if_failed(futures))
+                    if on_ad is not None
+                    else None
+                ),
             )
-            for index, ad in enumerate(ads, start=1):
-                print(f"Ad {index}: {ad}")
-                if futures:
-                    self._raise_if_failed(futures)
-                if on_ad is not None:
-                    futures.append(_executor.submit(on_ad, ad))
-                count += 1
+            if on_ad is None:
+                count = len(ads)
             self._wait_callbacks(futures)
         except ReachThresholdReached as exc:
             try:
