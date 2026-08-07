@@ -317,6 +317,19 @@ def capture_responses(
             or request_operation == request_body_filter
         )
 
+    def scroll_to_pagination_trigger() -> bool:
+        """Scroll to the current list end, which triggers Meta pagination."""
+        if active_driver is None:
+            return False
+        return bool(
+            active_driver.execute_script("""
+                const root = document.documentElement;
+                const before = window.scrollY;
+                window.scrollTo(0, root.scrollHeight);
+                return window.scrollY > before;
+                """)
+        )
+
     def capture_completed_response(request_id: str) -> None:
         """Capture only after the matched request has finished loading."""
         if (
@@ -386,7 +399,7 @@ def capture_responses(
         started_at = time.monotonic()
         next_scroll_at = started_at + scroll_interval_seconds
         waiting_for_graphql = False
-        graphql_seen_since_scroll = False
+        graphql_response_finished_since_scroll = False
         graphql_wait_started_at: float | None = None
         while not is_break and (
             duration_seconds is None or time.monotonic() - started_at < duration_seconds
@@ -417,10 +430,6 @@ def capture_responses(
                             "postData": request.get("postData", ""),
                             "headers": request.get("headers", {}),
                         }
-                        if waiting_for_graphql and is_target_request(
-                            request_details[request_id]
-                        ):
-                            graphql_seen_since_scroll = True
                         capture_completed_response(request_id)
                     continue
 
@@ -438,37 +447,43 @@ def capture_responses(
                 if request_id:
                     loading_finished_ids.add(request_id)
                     capture_completed_response(request_id)
+                    if (
+                        waiting_for_graphql
+                        and request_id in processed_response_ids
+                        and is_target_request(request_details.get(request_id, {}))
+                    ):
+                        graphql_response_finished_since_scroll = True
 
             now = time.monotonic()
             if (
                 waiting_for_graphql
-                and not graphql_seen_since_scroll
+                and not graphql_response_finished_since_scroll
                 and graphql_wait_started_at is not None
                 and now - graphql_wait_started_at >= 60
             ):
-                print(waiting_for_graphql, "waiting_for_graphql")
-                print(graphql_seen_since_scroll, "graphql_seen_since_scroll")
-                print(graphql_wait_started_at, "graphql_wait_started_at")
-                print(now - graphql_wait_started_at >= 60, "now")
                 print(
-                    "No pagination GraphQL request within 60 seconds; stopping crawl."
+                    "No completed pagination GraphQL response within 60 seconds; "
+                    "stopping crawl."
                 )
                 break
 
             if (
                 auto_scroll
+                and not is_break
                 and now >= next_scroll_at
-                and (not waiting_for_graphql or graphql_seen_since_scroll)
+                and (
+                    not waiting_for_graphql
+                    or graphql_response_finished_since_scroll
+                )
             ):
-                at_bottom = active_driver.execute_script("""
-                    window.scrollBy(0, window.innerHeight * 0.8);
-                    const root = document.documentElement;
-                    return window.innerHeight + window.scrollY >= root.scrollHeight - 2;
-                    """)
-                # Meta starts pagination only after its virtualized list reaches the end.
-                waiting_for_graphql = bool(at_bottom)
-                graphql_seen_since_scroll = False
-                graphql_wait_started_at = now if waiting_for_graphql else None
+                # Wait for one completed pagination response before scrolling again.
+                did_scroll = scroll_to_pagination_trigger()
+                if not did_scroll:
+                    print("Reached the end of the scrollable list; stopping crawl.")
+                    break
+                waiting_for_graphql = True
+                graphql_response_finished_since_scroll = False
+                graphql_wait_started_at = now
                 next_scroll_at = now + scroll_interval_seconds
 
             time.sleep(0.1)
