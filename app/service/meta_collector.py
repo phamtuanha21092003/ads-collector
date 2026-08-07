@@ -214,7 +214,7 @@ class MetaCollectorService:
             ads = crawler.search(
                 query=keyword,
                 country=country,
-                status=MetaAdsCrawler.STATUS_ALL,
+                status=status_filter,
                 max_results=max_results,
                 start_date=start_date,
                 end_date=end_date,
