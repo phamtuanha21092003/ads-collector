@@ -427,10 +427,10 @@ def capture_responses(
                 waiting_for_graphql
                 and not graphql_seen_since_scroll
                 and graphql_wait_started_at is not None
-                and now - graphql_wait_started_at >= 10
+                and now - graphql_wait_started_at >= 60
             ):
                 print(
-                    "No pagination GraphQL request within 10 seconds; stopping crawl."
+                    "No pagination GraphQL request within 60 seconds; stopping crawl."
                 )
                 break
 
