@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, unquote_plus, urlencode
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -25,7 +25,7 @@ def create_driver(
         options.add_argument(f"--proxy-server={proxy}")
     if headless:
         print("Running Chrome in headless mode.")
-    options.add_argument("--headless=false")
+    # options.add_argument("--headless=false")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
     options.add_argument("--lang=en-US")
@@ -236,8 +236,10 @@ def capture_responses(
     active_driver: webdriver.Chrome | None = None
 
     request_details: dict[str, dict[str, Any]] = {}
+    response_details: dict[str, dict[str, Any]] = {}
+    loading_finished_ids: set[str] = set()
     captured_response_bodies: list[str | dict[str, Any]] = []
-    seen_response_ids: set[str] = set()
+    processed_response_ids: set[str] = set()
     emitted_ad_ids: set[str] = set()
     callback_raised = False
     stop_check_raised = False
@@ -249,7 +251,6 @@ def capture_responses(
 
     def emit_ads(
         response_body: str | dict[str, Any],
-        break_loop: Callable[[], None] | None = None,
     ) -> None:
         """Invoke the callback once for each newly observed normalized ad."""
         nonlocal callback_raised
@@ -260,8 +261,6 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
-        # if len(ads) == 0 and break_loop is not None:
-        #     break_loop()
 
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
@@ -275,6 +274,73 @@ def capture_responses(
                 except Exception:
                     callback_raised = True
                     raise
+
+    def operation_name(request: dict[str, Any]) -> str:
+        post_data = request.get("postData", "") or ""
+        match = re.search(
+            r"(?:^|&)(?:fb_api_req_friendly_name|friendly_name|operationName)=([^&]+)",
+            post_data,
+        )
+        if match:
+            return unquote_plus(match.group(1))
+
+        headers = request.get("headers", {}) or {}
+        for name, value in headers.items():
+            if name.lower() == "x-fb-friendly-name":
+                return str(value)
+        return ""
+
+    def is_target_request(request: dict[str, Any]) -> bool:
+        request_url = request.get("url", "") or ""
+        post_data = request.get("postData", "") or ""
+        request_operation = operation_name(request)
+        return (not url_filter or url_filter in request_url) and (
+            not request_body_filter
+            or request_body_filter in post_data
+            or request_operation == request_body_filter
+        )
+
+    def capture_completed_response(request_id: str) -> None:
+        """Capture only after the matched request has finished loading."""
+        if (
+            request_id in processed_response_ids
+            or request_id not in loading_finished_ids
+            or active_driver is None
+        ):
+            return
+
+        request = request_details.get(request_id)
+        response = response_details.get(request_id)
+        if request is None or response is None:
+            return
+
+        if not is_target_request(request):
+            processed_response_ids.add(request_id)
+            return
+
+        url = response.get("url", "")
+        mime_type = response.get("mimeType", "")
+        if url_filter and url_filter not in url:
+            processed_response_ids.add(request_id)
+            return
+        if mime_filter and mime_filter.lower() not in mime_type.lower():
+            processed_response_ids.add(request_id)
+            return
+
+        try:
+            body, _ = read_response_body(active_driver, request_id)
+        except RuntimeError as error:
+            print(f"Bỏ qua {url}: {error}")
+            processed_response_ids.add(request_id)
+            return
+
+        processed_response_ids.add(request_id)
+        body_text = decode_for_filter(body)
+        if response_body_filter and response_body_filter not in body_text:
+            return
+        captured_response_bodies.append(body_text)
+        emit_ads(body_text)
+        print(f"Đã capture: {operation_name(request) or request_id}")
 
     try:
         active_driver = create_driver(proxy=active_proxy, headless=headless)
@@ -304,6 +370,7 @@ def capture_responses(
         next_scroll_at = started_at + scroll_interval_seconds
         waiting_for_graphql = False
         graphql_seen_since_scroll = False
+        graphql_wait_started_at: float | None = None
         while not is_break and (
             duration_seconds is None or time.monotonic() - started_at < duration_seconds
         ):
@@ -313,20 +380,6 @@ def capture_responses(
                 except Exception:
                     stop_check_raised = True
                     raise
-            now = time.monotonic()
-
-            if auto_scroll and now >= next_scroll_at:
-                if waiting_for_graphql and not graphql_seen_since_scroll:
-                    print("No /api/graphql/ request after scroll; stopping crawl.")
-                    break_loop()
-                    continue
-                active_driver.execute_script(
-                    "window.scrollTo(0, document.documentElement.scrollHeight);"
-                )
-                waiting_for_graphql = True
-                graphql_seen_since_scroll = False
-                next_scroll_at = now + scroll_interval_seconds
-
             entries = active_driver.get_log("performance")
 
             for entry in entries:
@@ -340,8 +393,6 @@ def capture_responses(
                 if method == "Network.requestWillBeSent":
                     request_id = params.get("requestId")
                     request = params.get("request", {})
-                    if waiting_for_graphql and url_filter in request.get("url", ""):
-                        graphql_seen_since_scroll = True
                     if request_id:
                         request_details[request_id] = {
                             "method": request.get("method"),
@@ -349,54 +400,55 @@ def capture_responses(
                             "postData": request.get("postData", ""),
                             "headers": request.get("headers", {}),
                         }
+                        if waiting_for_graphql and is_target_request(
+                            request_details[request_id]
+                        ):
+                            graphql_seen_since_scroll = True
+                        capture_completed_response(request_id)
                     continue
 
-                if method != "Network.responseReceived":
+                if method == "Network.responseReceived":
+                    request_id = params.get("requestId")
+                    if request_id:
+                        response_details[request_id] = params.get("response", {})
+                        capture_completed_response(request_id)
+                    continue
+
+                if method != "Network.loadingFinished":
                     continue
 
                 request_id = params.get("requestId")
-                response = params.get("response", {})
-                if not request_id or request_id in seen_response_ids:
-                    continue
+                if request_id:
+                    loading_finished_ids.add(request_id)
+                    capture_completed_response(request_id)
 
-                seen_response_ids.add(request_id)
-                url = response.get("url", "")
-                mime_type = response.get("mimeType", "")
-                status = response.get("status")
-                request = request_details.get(request_id, {})
-                post_data = request.get("postData", "") or ""
-                operation_hint = ""
+            now = time.monotonic()
+            if (
+                waiting_for_graphql
+                and not graphql_seen_since_scroll
+                and graphql_wait_started_at is not None
+                and now - graphql_wait_started_at >= 10
+            ):
+                print(
+                    "No pagination GraphQL request within 10 seconds; stopping crawl."
+                )
+                break
 
-                if post_data:
-                    match = re.search(
-                        r"(?:friendly_name|operationName)=([^&]+)", post_data
-                    )
-                    if match:
-                        operation_hint = match.group(1)
-                if (operation_hint or request_id) != "AdLibrarySearchPaginationQuery":
-                    continue
-
-                if url_filter and url_filter not in url:
-                    continue
-                if mime_filter and mime_filter.lower() not in mime_type.lower():
-                    continue
-                if request_body_filter and request_body_filter not in post_data:
-                    continue
-
-                try:
-                    body, was_base64 = read_response_body(active_driver, request_id)
-                except RuntimeError as error:
-                    print(f"Bỏ qua {url}: {error}")
-                    continue
-
-                body_text = decode_for_filter(body)
-
-                if response_body_filter and response_body_filter not in body_text:
-                    continue
-                captured_response_bodies.append(body_text)
-
-                emit_ads(body_text, break_loop)
-                print(f"Đã capture: {operation_hint or request_id}")
+            if (
+                auto_scroll
+                and now >= next_scroll_at
+                and (not waiting_for_graphql or graphql_seen_since_scroll)
+            ):
+                at_bottom = active_driver.execute_script("""
+                    window.scrollBy(0, window.innerHeight * 0.8);
+                    const root = document.documentElement;
+                    return window.innerHeight + window.scrollY >= root.scrollHeight - 2;
+                    """)
+                # Meta starts pagination only after its virtualized list reaches the end.
+                waiting_for_graphql = bool(at_bottom)
+                graphql_seen_since_scroll = False
+                graphql_wait_started_at = now if waiting_for_graphql else None
+                next_scroll_at = now + scroll_interval_seconds
 
             time.sleep(0.1)
 
