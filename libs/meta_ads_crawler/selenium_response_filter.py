@@ -266,10 +266,6 @@ def capture_responses(
     stop_check_raised = False
     is_break = False
 
-    def break_loop() -> None:
-        nonlocal is_break
-        is_break = True
-
     def emit_ads(
         response_body: str | dict[str, Any],
     ) -> None:
@@ -282,6 +278,7 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
+        print(f"ads {len(ads)}")
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
             if ad_id is None:
@@ -361,7 +358,6 @@ def capture_responses(
         raise_for_graphql_error(body_text)
         captured_response_bodies.append(body_text)
         emit_ads(body_text)
-        print(f"Đã capture: {operation_name(request) or request_id}")
 
     try:
         active_driver = create_driver(proxy=active_proxy, headless=headless)
@@ -450,6 +446,10 @@ def capture_responses(
                 and graphql_wait_started_at is not None
                 and now - graphql_wait_started_at >= 60
             ):
+                print(waiting_for_graphql, "waiting_for_graphql")
+                print(graphql_seen_since_scroll, "graphql_seen_since_scroll")
+                print(graphql_wait_started_at, "graphql_wait_started_at")
+                print(now - graphql_wait_started_at >= 60, "now")
                 print(
                     "No pagination GraphQL request within 60 seconds; stopping crawl."
                 )
