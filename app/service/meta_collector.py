@@ -226,6 +226,7 @@ class MetaCollectorService:
                     if on_ad is not None
                     else None
                 ),
+                scroll_interval_seconds=6,
             )
             if on_ad is None:
                 count = len(ads)
