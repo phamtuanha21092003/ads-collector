@@ -25,7 +25,7 @@ def create_driver(
         options.add_argument(f"--proxy-server={proxy}")
     if headless:
         print("Running Chrome in headless mode.")
-    # options.add_argument("--headless=false")
+    options.add_argument("--headless=false")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
     options.add_argument("--lang=en-US")
