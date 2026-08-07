@@ -1,4 +1,5 @@
 import base64
+from email import message
 import json
 import re
 import time
@@ -10,6 +11,7 @@ from urllib.parse import parse_qsl, unquote_plus, urlencode
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 
+from libs.meta_ads_collector.exceptions import RateLimitError
 from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
 
@@ -66,6 +68,25 @@ def read_response_body(
 
 def decode_for_filter(body: bytes) -> str:
     return body.decode("utf-8", errors="replace")
+
+
+def raise_for_graphql_error(response_body: str) -> None:
+    """Turn GraphQL errors returned with HTTP 200 into actionable errors."""
+    payload = response_body.removeprefix("for (;;);").lstrip()
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return
+
+    errors = data.get("errors", []) if isinstance(data, dict) else []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        code = error.get("code")
+        message = str(error.get("message", "GraphQL request failed"))
+        if code == 1675004 or "rate limit" in message.lower():
+            print(f"GraphQL rate limit error: {message}")
+            raise RateLimitError(message, retry_after=30)
 
 
 class MetaAdsCrawler:
@@ -261,7 +282,6 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
-
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
             if ad_id is None:
@@ -338,6 +358,7 @@ def capture_responses(
         body_text = decode_for_filter(body)
         if response_body_filter and response_body_filter not in body_text:
             return
+        raise_for_graphql_error(body_text)
         captured_response_bodies.append(body_text)
         emit_ads(body_text)
         print(f"Đã capture: {operation_name(request) or request_id}")
