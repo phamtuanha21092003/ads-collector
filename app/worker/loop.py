@@ -12,7 +12,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from bson import ObjectId
 from bson.errors import InvalidId
 from loguru import logger
-
+from app.ai_client import AIClient
 from app.config import Settings
 from app.db import ads_collection, jobs_collection, shops_collection
 from app.model.ad_model import AdModel
@@ -31,6 +31,7 @@ class WorkerLoop:
     def __init__(
         self,
         settings: Settings,
+        analyzer: AIClient,
         job_repo: JobRepository | None = None,
         ad_repo: AdRepository | None = None,
         shop_repo: ShopRepository | None = None,
@@ -39,11 +40,14 @@ class WorkerLoop:
         self._settings = settings
         self._job_repo = job_repo or JobRepository(jobs_collection(settings))
         self._ad_repo = ad_repo or AdRepository(ads_collection(settings))
-        self._shop_repo = shop_repo or ShopRepository(shops_collection(settings), settings)
+        self._shop_repo = shop_repo or ShopRepository(
+            shops_collection(settings), settings
+        )
         self._meta = meta or MetaCollectorService()
         self._stopping = False
         self._channel: Channel | None = None
         self._stop_event: asyncio.Event | None = None
+        self._analyzer = analyzer
 
     def stop(self) -> None:
         self._stopping = True
@@ -69,8 +73,7 @@ class WorkerLoop:
         channel, queue = await declare_jobs_queue(self._settings)
         self._channel = channel
         logger.info(
-            "Worker {} consuming queue={!r} max_retries={} "
-            "retry_delay={}s dlq={!r}",
+            "Worker {} consuming queue={!r} max_retries={} " "retry_delay={}s dlq={!r}",
             self._settings.worker_id,
             self._settings.rabbitmq_queue,
             self._settings.rabbitmq_max_retries,
@@ -265,7 +268,7 @@ class WorkerLoop:
                 "mustReach": payload.get("mustReach") or 0,
                 "storeMustReach": payload.get("storeMustReach") or 0,
                 "metadata": payload.get("metadata"),
-                "mediaType": payload.get("mediaType")
+                "mediaType": payload.get("mediaType"),
             }
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
@@ -399,6 +402,7 @@ class WorkerLoop:
         assert job.id is not None
         loop = asyncio.get_running_loop()
         new_saved = 0
+        keywords: list[str] = []
         must_reach = int(job.must_reach or 0)
         store_must_reach = int(job.store_must_reach or 0)
         spawned_domains: set[str] = set()
@@ -430,9 +434,7 @@ class WorkerLoop:
                     shop = link_domain
                 else:
                     target = job.keyword.strip().lower().rstrip(".")
-                    if link_domain != target and not link_domain.endswith(
-                        f".{target}"
-                    ):
+                    if link_domain != target and not link_domain.endswith(f".{target}"):
                         return
                     shop = target
 
@@ -449,11 +451,14 @@ class WorkerLoop:
                 if not is_duplicate_ad:
                     seen_ad_ids.add(ad_id)
                     new_saved += 1
+                    keyword = self._analyzer._llm_analyze_keyword(
+                        title=raw.get("title"), content=raw.get("body")
+                    )
+                    print("keyword", keyword)
+                    keywords.append(keyword)
 
                 total = len(seen_ad_ids)
-                store_total = (
-                    len(pending_domains) if pending_domains is not None else 0
-                )
+                store_total = len(pending_domains) if pending_domains is not None else 0
                 refresh_store_only = (
                     is_duplicate_ad
                     and collect_domains
@@ -467,8 +472,7 @@ class WorkerLoop:
                     loop,
                 ).result()
                 logger.info(
-                    "Job {} discovered store {!r} — spawned domain job "
-                    "(stores={})",
+                    "Job {} discovered store {!r} — spawned domain job " "(stores={})",
                     job.id,
                     link_domain,
                     store_total,
@@ -517,9 +521,7 @@ class WorkerLoop:
                 )
 
             if must_reach > 0 and total > must_reach:
-                raise ReachThresholdReached(
-                    f"ads {total} > mustReach {must_reach}"
-                )
+                raise ReachThresholdReached(f"ads {total} > mustReach {must_reach}")
             if (
                 collect_domains
                 and store_must_reach > 0
@@ -540,6 +542,8 @@ class WorkerLoop:
             on_ad=on_ad,
             status_filter=job.status_filter,
         )
+        group_keyword = self._analyzer._llm_group_keywords(keywords=list(keywords))
+        print("group_keyword", group_keyword)
         return new_saved, fetched
 
     async def _process_keyword_job(

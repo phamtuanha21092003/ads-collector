@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     )
     proxyscrape_api_token: str = ""
     proxyscrape_cache_ttl_seconds: float = 300.0
+    openai_api_key: str = ""
+    openai_api_base: str = ""
+    openai_model: str = ""
 
 
 @lru_cache

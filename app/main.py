@@ -7,6 +7,7 @@ import sys
 from loguru import logger
 
 from app.config import get_settings
+from app.ai_client import AIClient
 from app.db import close_client, system_configs_collection
 from app.mq import close as close_mq
 from app.repository.system_config_repo import SystemConfigRepository
@@ -58,7 +59,8 @@ async def _async_main() -> None:
         proxy_pool=proxy_rotation.pool,
         proxy_scrape=proxy_scrape,
     )
-    worker = WorkerLoop(settings, meta=meta)
+    analyzer = AIClient(settings)
+    worker = WorkerLoop(settings, meta=meta, analyzer=analyzer)
     worker_task = asyncio.create_task(worker.run_forever(), name="ads-collector-worker")
     loop = asyncio.get_running_loop()
 
