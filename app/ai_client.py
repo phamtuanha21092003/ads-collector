@@ -73,7 +73,8 @@ class AIClient:
             )
 
     async def analyize_keyword(self, prompt: str) -> ChatResult:
-        response = self.client.responses.create(
+        client = self._get_client()
+        response = client.responses.create(
             model=os.getenv("OPENAI_MODEL"),
             instructions="You are an expert e-commerce advertising analyst.",
             input=prompt,
