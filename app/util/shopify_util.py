@@ -1,4 +1,4 @@
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import dns.resolver
 import requests
@@ -6,6 +6,49 @@ import requests
 SHOPIFY_IPS = {
     "23.227.38.65",
 }
+
+
+def canonical_product_url(url: str) -> str | None:
+    """Return Shopify's query-free product JSON URL from a product handle URL."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    value = url.strip()
+    if not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    path = parsed.path.rstrip("/")
+    if not path.startswith("/products/"):
+        return None
+    handle = path.removeprefix("/products/")
+    if not handle or "/" in handle:
+        return None
+    if not handle.endswith(".json"):
+        path = f"{path}.json"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None:
+    """Fetch a Shopify product payload from a raw ad product URL."""
+    product_url = canonical_product_url(url)
+    if product_url is None:
+        return None
+    response = requests.get(
+        product_url,
+        timeout=timeout,
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    if (
+        response.status_code != 200
+        or not response.headers.get("Content-Type", "").startswith("application/json")
+    ):
+        return None
+    payload = response.json()
+    product = payload.get("product") if isinstance(payload, dict) else None
+    if not isinstance(product, dict):
+        return None
+    return product_url, product
 
 
 def extract_domain(url: str) -> str | None:

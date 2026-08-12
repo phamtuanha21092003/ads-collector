@@ -14,15 +14,20 @@ from bson.errors import InvalidId
 from loguru import logger
 from app.ai_client import AIClient
 from app.config import Settings
-from app.db import ads_collection, jobs_collection, shops_collection
+from app.db import ads_collection, jobs_collection, products_collection, shops_collection
 from app.model.ad_model import AdModel
 from app.model.job_model import JobModel, JobType
 from app.mq import RETRY_COUNT_HEADER, declare_jobs_queue
 from app.repository.ad_repo import AdRepository
 from app.repository.job_repo import JobRepository
+from app.repository.product_repo import ProductRepository
 from app.repository.shop_repo import ShopRepository
 from app.service.meta_collector import MetaCollectorService, ReachThresholdReached
-from app.util.shopify_util import extract_domain, is_shopify_domain
+from app.util.shopify_util import (
+    extract_domain,
+    get_product_from_url,
+    is_shopify_domain,
+)
 
 DOMAIN_WINDOW_DAYS = 30
 MAX_LEVEL_SEARCH = 3
@@ -35,12 +40,14 @@ class WorkerLoop:
         analyzer: AIClient,
         job_repo: JobRepository | None = None,
         ad_repo: AdRepository | None = None,
+        product_repo: ProductRepository | None = None,
         shop_repo: ShopRepository | None = None,
         meta: MetaCollectorService | None = None,
     ) -> None:
         self._settings = settings
         self._job_repo = job_repo or JobRepository(jobs_collection(settings))
         self._ad_repo = ad_repo or AdRepository(ads_collection(settings))
+        self._product_repo = product_repo or ProductRepository(products_collection(settings))
         self._shop_repo = shop_repo or ShopRepository(
             shops_collection(settings), settings
         )
@@ -513,6 +520,22 @@ class WorkerLoop:
                 self._ad_repo.upsert_one(ad),
                 loop,
             ).result()
+
+            # Product failures must not fail the ad-collection job.
+            try:
+                product_result = get_product_from_url(link_url)
+                if product_result is not None:
+                    product_url, product = product_result
+                    asyncio.run_coroutine_threadsafe(
+                        self._product_repo.upsert_one(
+                            product=product,
+                            job_ids=[job.id, rootId],
+                            link_url=product_url,
+                        ),
+                        loop,
+                    ).result()
+            except Exception as exc:
+                logger.warning("Could not collect product from {!r}: {}", link_url, exc)
 
             asyncio.run_coroutine_threadsafe(
                 self._publish_keyword_progress(
