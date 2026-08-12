@@ -280,7 +280,6 @@ def capture_responses(
             if isinstance(response_body, dict)
             else extract_ads_from_scripts([response_body])
         )
-        print(f"ads {len(ads)}")
         for ad in ads:
             ad_id = ad.get("ad_archive_id")
             if ad_id is None:
@@ -360,7 +359,7 @@ def capture_responses(
         try:
             body, _ = read_response_body(active_driver, request_id)
         except RuntimeError as error:
-            print(f"Bỏ qua {url}: {error}")
+            print(f"Skip {url}: {error}")
             processed_response_ids.add(request_id)
             return
 

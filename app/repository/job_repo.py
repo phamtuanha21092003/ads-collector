@@ -136,8 +136,7 @@ class JobRepository:
             },
         )
 
-    async def get_existing_keyword(self, rootId):
-
+    async def get_existing_keyword(self, rootId: str):
         jobs = await self._collection.find({"rootId": ObjectId(rootId)}).to_list()
         keywords: list[str] = []
         for job in jobs:

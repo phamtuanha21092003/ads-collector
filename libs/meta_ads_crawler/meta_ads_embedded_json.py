@@ -195,5 +195,4 @@ def getAds(driver):
     time.sleep(2)
     script_contents = read_script_contents(driver)
     ads = extract_ads_from_scripts(script_contents)
-    print(f"Đã lấy {len(ads)} quảng cáo.")
     return ads

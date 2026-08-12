@@ -310,6 +310,7 @@ class WorkerLoop:
     async def _spawn_domain_jobs(
         self,
         parent: JobModel,
+        rootId: ObjectId,
         domains: set[str],
     ) -> None:
         if not domains:
@@ -358,11 +359,15 @@ class WorkerLoop:
                 must_reach=parent.must_reach,
                 media_type=parent.media_type,
                 metadata={"parentJobId": str(parent.id)},
+                rootId=rootId,
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
             await self._shop_repo.upsert_for_domain(
-                domain, child.id, parent_job_id=parent.id
+                domain,
+                child.id,
+                parent_job_id=parent.id,
+                root_job_id=rootId,
             )
             await self._publish_job(child.id)
             logger.info(
@@ -410,15 +415,11 @@ class WorkerLoop:
         # Meta collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
         # Guard all shared mutable state and check-then-act spawn/upsert logic.
         state_lock = threading.Lock()
-        print(spawn_domains_immediately)
         should_analyze = (
             spawn_domains_immediately and job.level and job.level < MAX_LEVEL_SEARCH
         )
-        rootId = None
-        if job.level == 1:
-            rootId = job.id
-        else:
-            rootId = job.rootId
+        # Jobs without an explicit root are roots themselves.
+        rootId = job.rootId or job.id
 
         def on_ad(raw: dict[str, Any]) -> None:
             nonlocal new_saved
@@ -478,7 +479,7 @@ class WorkerLoop:
 
             if should_spawn:
                 asyncio.run_coroutine_threadsafe(
-                    self._spawn_domain_jobs(job, {link_domain}),
+                    self._spawn_domain_jobs(job, rootId, {link_domain}),
                     loop,
                 ).result()
                 logger.info(

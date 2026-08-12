@@ -29,6 +29,7 @@ class ShopRepository:
         domain_job_id: ObjectId,
         *,
         parent_job_id: ObjectId | None = None,
+        root_job_id: ObjectId | None = None,
     ) -> None:
         existing_shop = await self._collection.find_one({"shop": shop})
         now = utc_now()
@@ -52,6 +53,8 @@ class ShopRepository:
         job_ids = [domain_job_id]
         if parent_job_id is not None:
             job_ids.append(parent_job_id)
+        if root_job_id is not None:
+            job_ids.append(root_job_id)
 
         if existing_shop is None:
             await self._collection.insert_one(

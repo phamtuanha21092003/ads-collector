@@ -8,6 +8,7 @@ from app.model.ad_model import AdModel
 # THIS FIELD IS BREAKING CHANGE OF RAW DATA
 ADS_VERSION = 2
 
+
 class AdRepository:
     def __init__(self, collection: AsyncIOMotorCollection) -> None:
         self._collection = collection
@@ -17,7 +18,12 @@ class AdRepository:
         keywords = [keyword for keyword in ad.keywords if keyword]
         job_ids = [job_id for job_id in ad.job_ids if job_id is not None]
         await self._collection.update_one(
-            {"adId": ad.ad_id},
+            {
+                "$or": [
+                    {"raw.link_url": ad.raw["link_url"]},
+                    {"adId": ad.ad_id},
+                ]
+            },
             {
                 "$addToSet": {
                     "keywords": {"$each": keywords},
@@ -26,14 +32,14 @@ class AdRepository:
                 "$set": {
                     "country": ad.country,
                     "raw": ad.raw,
-                    "updatedAt": now,
                     "shop": ad.shop,
-                    "version": ADS_VERSION
+                    "updatedAt": now,
+                    "version": ADS_VERSION,
                 },
                 "$setOnInsert": {
                     "adId": ad.ad_id,
                     "createdAt": now,
-                    "qualifiedAdsCount": 0
+                    "qualifiedAdsCount": 0,
                 },
             },
             upsert=True,
@@ -50,21 +56,28 @@ class AdRepository:
             job_ids = [job_id for job_id in ad.job_ids if job_id is not None]
             operations.append(
                 UpdateOne(
-                    {"adId": ad.ad_id},
+                    {
+                        "$or": [
+                            {"raw.link_url": ad.raw["link_url"]},
+                            {"adId": ad.ad_id},
+                        ]
+                    },
                     {
                         "$addToSet": {
                             "keywords": {"$each": keywords},
                             "jobIds": {"$each": job_ids},
                         },
                         "$set": {
-                            "country": ad.country,
-                            "raw": ad.raw,
                             "updatedAt": now,
-                            "version": ADS_VERSION
+                            "version": ADS_VERSION,
                         },
                         "$setOnInsert": {
                             "adId": ad.ad_id,
+                            "country": ad.country,
+                            "raw": ad.raw,
+                            "shop": ad.shop,
                             "createdAt": now,
+                            "qualifiedAdsCount": 0,
                         },
                     },
                     upsert=True,
@@ -77,9 +90,7 @@ class AdRepository:
             chunk = operations[index : index + chunk_size]
             result = await self._collection.bulk_write(chunk, ordered=False)
             written += (
-                result.upserted_count
-                + result.modified_count
-                + result.matched_count
+                result.upserted_count + result.modified_count + result.matched_count
             )
         return written
 
@@ -101,4 +112,3 @@ class AdRepository:
                 "$set": {"updatedAt": now, "qualifiedAdsCount": count},
             },
         )
-

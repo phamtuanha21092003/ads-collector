@@ -1,4 +1,8 @@
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
+from motor.motor_asyncio import (
+    AsyncIOMotorClient,
+    AsyncIOMotorCollection,
+    AsyncIOMotorDatabase,
+)
 
 from app.config import Settings
 
@@ -42,6 +46,12 @@ async def ensure_indexes(settings: Settings) -> None:
 
     await jobs.create_index([("status", 1), ("createdAt", 1)])
     await ads.create_index([("adId", 1)], unique=True)
+    # await ads.create_index(
+    #     [("raw.link_url", 1)],
+    #     unique=True,
+    #     partialFilterExpression={"raw.link_url": {"$type": "string"}},
+    #     name="idx_ads_raw_link_url_unique",
+    # )
     await ads.create_index([("keywords", 1)])
     await ads.create_index([("jobIds", 1)])
     await shops.create_index([("shop", 1)], unique=True, name="idx_shops_shop_unique")
