@@ -58,5 +58,4 @@ class MongoBaseModel(BaseModel):
     def from_mongo(cls, data: dict | None):
         if data is None:
             return None
-
         return cls.model_validate(data)

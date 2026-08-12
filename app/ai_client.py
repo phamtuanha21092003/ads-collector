@@ -1,8 +1,8 @@
 import logging
 from dataclasses import dataclass
 from openai import OpenAI
-import os
 from app.config import Settings
+import json
 
 log = logging.getLogger(__name__)
 
@@ -63,19 +63,35 @@ class AIClient:
         """
         return prompt
 
-    def _prepare_group_keyword(seft, keywords: list[str]):
-        print(keywords)
-        prompt = f""" You are an expert e-commerce advertising data analyst.
-        You will receive a list of keywords extracted from multiple ads within the same niche.
-        Your task is to GROUP keywords that share the same meaning or describe the same product type/feature into clusters, then select one representative keyword that most accurately represents each cluster.
+    def _prepare_group_keyword(seft, keywords: list[str], existing_keywords: list[str]):
+        existing_keywords_bullets = "\n".join(f"- {kw}" for kw in existing_keywords)
+        keywords_bullets = "\n".join(f"- {kw}" for kw in keywords)
+        prompt = f""" 
+        You are an expert e-commerce advertising data analyst. You will receive a list of keywords extracted from multiple ads within the same niche, along with a list of keywords that ALREADY EXIST in the system (from previous crawls/levels). Your task is to GROUP the new keywords that share the same meaning or describe the same product type/feature into clusters, select one representative keyword for each cluster, and EXCLUDE any keyword (or cluster) that has the same meaning as one already present in existing_keywords.
+
         MANDATORY RULES:
-        1. Two keywords are considered THE SAME GROUP if they describe the same product type and the same standout feature (USP), even if worded differently (synonyms, abbreviations, different word order, singular/plural forms). Example: "mini deep fryer with oil filter", "compact oil-filtering fryer", "small fryer with automatic oil filter" → SAME GROUP. 
-        2. Two keywords describing the same product type but with a DIFFERENT USP/main feature must NOT be merged together. 
-        Example: "mini deep fryer with oil filter" and "stainless steel deep fryer" → DIFFERENT GROUPS (different USP: oil filtering vs. material). 
-        3. For each group, select one representative keyword based on the following criteria: - Shortest, clearest phrasing - No spelling errors, no redundant/repeated words - Prioritize the keyword with the highest frequency within the group (if frequency data is available) 4. Discard keywords that are too generic and do not describe a distinctive product feature (e.g., "kitchen gadget", "home essentials", "trending item") — place these in a separate "generic - discarded" group; do not count them as a product group. 5. Do not invent any keyword that is not present in the input list. 
-        OUTPUT FORMAT — return JSON in the following structure, with no explanation outside the JSON: 
-        {{ "groups": [ {{ "representative_keyword": "mini deep fryer with oil filter", "members": [ "mini deep fryer with oil filter", "compact oil-filtering fryer", "small fryer with automatic oil filter" ], "count": 3 }} ], "discarded_generic": [ "kitchen gadget", "home essentials" ] }} 
-        KEYWORD LIST TO GROUP: {chr(10).join(f"- {keyword}" for keyword in keywords)} """
+
+        1. Two keywords are considered THE SAME GROUP if they describe the same product type and the same standout feature (USP), even if worded differently (synonyms, abbreviations, different word order, singular/plural forms). Example: "mini deep fryer with oil filter", "compact oil-filtering fryer", "small fryer with automatic oil filter" → SAME GROUP.
+
+        2. Two keywords describing the same product type but with a DIFFERENT USP/main feature must NOT be merged together.
+        Example: "mini deep fryer with oil filter" and "stainless steel deep fryer" → DIFFERENT GROUPS (different USP: oil filtering vs. material).
+
+        3. For each group, select one representative keyword based on the following criteria: - Shortest, clearest phrasing - No spelling errors, no redundant/repeated words - Prioritize the keyword with the highest frequency within the group (if frequency data is available)
+
+        4. Discard keywords that are too generic and do not describe a distinctive product feature (e.g., "kitchen gadget", "home essentials", "trending item") — place these in a separate "generic - discarded" group; do not count them as a product group.
+
+        5. CHECK AGAINST existing_keywords: if a new keyword (or an entire group of new keywords) has the SAME meaning/same product type + same USP as any keyword already listed in existing_keywords, DO NOT create a new group for it. Instead, place it in a separate "duplicate_existing" list, along with the matching existing keyword it duplicates. Only keywords/groups that are genuinely NEW (not semantically covered by existing_keywords) should appear in "groups".
+
+        6. Do not invent any keyword that is not present in the input list.
+
+        OUTPUT FORMAT — return JSON in the following structure, with no explanation outside the JSON:
+        {{"groups": [{{"representative_keyword": "mini deep fryer with oil filter","members": [  "mini deep fryer with oil filter",  "compact oil-filtering fryer",  "small fryer with automatic oil filter"],"count": 3}}], "duplicate_existing": [{{"new_keyword": "small fryer with oil filtering function","matched_existing_keyword": "mini deep fryer with oil filter"}}],"discarded_generic": ["kitchen gadget","home essentials"]}}
+
+        EXISTING KEYWORDS (already in the system — do not duplicate these):
+        {existing_keywords_bullets}
+
+        KEYWORD LIST TO GROUP:
+        {keywords_bullets} """
         return prompt
 
     def _raise_http(
@@ -99,13 +115,20 @@ class AIClient:
         )
         return response.choices[0]["message"]["content"]
 
-    def _llm_group_keywords(self, keywords: list[str]) -> str:
+    def _llm_group_keywords(
+        self, keywords: list[str], existing_keywords: list[str]
+    ) -> list[str]:
         client = self._get_client()
-        prompt = self._prepare_group_keyword(keywords)
-
+        prompt = self._prepare_group_keyword(
+            keywords=keywords, existing_keywords=existing_keywords
+        )
+        list_key = []
         response = client.responses.create(
             model=self.settings.openai_model,
             instructions="You are an expert e-commerce advertising analyst.",
             input=prompt,
         )
-        return response.choices[0]["message"]["content"]
+        content = json.loads(response.choices[0]["message"]["content"])
+        for g in content["groups"]:
+            list_key.append(g["representative_keyword"])
+        return list_key

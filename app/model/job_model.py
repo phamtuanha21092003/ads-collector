@@ -18,6 +18,7 @@ class JobStatus(StrEnum):
 class JobType(StrEnum):
     KEYWORD = "keyword"
     DOMAIN = "domain"
+    KeywordExpand = "keyword-expand"
 
 
 class JobModel(MongoBaseModel):
@@ -95,3 +96,5 @@ class JobModel(MongoBaseModel):
         serialization_alias="mediaType",
         validation_alias="mediaType",
     )
+    level: int | None = None
+    rootId: ObjectId | None = None

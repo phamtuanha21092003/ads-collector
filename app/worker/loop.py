@@ -25,6 +25,7 @@ from app.service.meta_collector import MetaCollectorService, ReachThresholdReach
 from app.util.shopify_util import extract_domain, is_shopify_domain
 
 DOMAIN_WINDOW_DAYS = 30
+MAX_LEVEL_SEARCH = 3
 
 
 class WorkerLoop:
@@ -409,6 +410,15 @@ class WorkerLoop:
         # Meta collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
         # Guard all shared mutable state and check-then-act spawn/upsert logic.
         state_lock = threading.Lock()
+        print(spawn_domains_immediately)
+        should_analyze = (
+            spawn_domains_immediately and job.level and job.level < MAX_LEVEL_SEARCH
+        )
+        rootId = None
+        if job.level == 1:
+            rootId = job.id
+        else:
+            rootId = job.rootId
 
         def on_ad(raw: dict[str, Any]) -> None:
             nonlocal new_saved
@@ -451,11 +461,11 @@ class WorkerLoop:
                 if not is_duplicate_ad:
                     seen_ad_ids.add(ad_id)
                     new_saved += 1
-                    keyword = self._analyzer._llm_analyze_keyword(
-                        title=raw.get("title"), content=raw.get("body")
-                    )
-                    print("keyword", keyword)
-                    keywords.append(keyword)
+                    if should_analyze:
+                        keyword = self._analyzer._llm_analyze_keyword(
+                            title=raw.get("title"), content=raw.get("body")
+                        )
+                        keywords.append(keyword)
 
                 total = len(seen_ad_ids)
                 store_total = len(pending_domains) if pending_domains is not None else 0
@@ -491,7 +501,7 @@ class WorkerLoop:
                 return
 
             ad = AdModel(
-                job_ids=[job.id],
+                job_ids=[job.id, rootId],
                 ad_id=ad_id,
                 keywords=[job.keyword],
                 country=country,
@@ -542,8 +552,19 @@ class WorkerLoop:
             on_ad=on_ad,
             status_filter=job.status_filter,
         )
-        group_keyword = self._analyzer._llm_group_keywords(keywords=list(keywords))
-        print("group_keyword", group_keyword)
+
+        if should_analyze:
+            exsting_keywords = await self._job_repo.get_existing_keyword(rootId)
+            group_keyword = self._analyzer._llm_group_keywords(
+                keywords=keywords, existing_keywords=exsting_keywords
+            )
+            for keyword in group_keyword:
+                await self._spawn_child_keyword_jobs(
+                    parent=job,
+                    keyword=keyword,
+                    rootId=rootId,
+                ),
+
         return new_saved, fetched
 
     async def _process_keyword_job(
@@ -655,3 +676,31 @@ class WorkerLoop:
             return
 
         logger.info("Job {} done — saved {} ads", job.id, saved)
+
+    async def _spawn_child_keyword_jobs(
+        self,
+        parent: JobModel,
+        rootId: str,
+        keyword: str,
+    ) -> None:
+        assert parent.id is not None
+        job = JobModel(
+            level=parent.level + 1,
+            rootId=ObjectId(rootId),
+            keyword=keyword,
+            parentId=ObjectId(parent.id),
+            country=parent.country,
+            media_type=parent.media_type,
+            start_date=parent.start_date,
+            end_date=parent.end_date,
+            max_results=parent.max_results,
+            store_must_reach=parent.store_must_reach,
+            type=JobType.KeywordExpand,
+            user_id=parent.user_id,
+            status_filter=parent.status_filter,
+            must_reach=parent.must_reach,
+            metadata={"parentJobId": str(parent.id)},
+        )
+        child = await self._job_repo.create_pending(job)
+        assert child.id is not None
+        await self._publish_job(child.id)

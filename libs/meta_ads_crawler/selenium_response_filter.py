@@ -226,6 +226,8 @@ class MetaAdsCrawler:
             "q": query,
             "search_type": "keyword_unordered",
             "media_type": "all",
+            "sort_data[direction]": "desc",
+            "sort_data[mode]": "total_impressions",
         }
         if start_date is not None:
             parameters["start_date[min]"] = start_date
@@ -321,14 +323,12 @@ def capture_responses(
         """Scroll to the current list end, which triggers Meta pagination."""
         if active_driver is None:
             return False
-        return bool(
-            active_driver.execute_script("""
+        return bool(active_driver.execute_script("""
                 const root = document.documentElement;
                 const before = window.scrollY;
                 window.scrollTo(0, root.scrollHeight);
                 return window.scrollY > before;
-                """)
-        )
+                """))
 
     def capture_completed_response(request_id: str) -> None:
         """Capture only after the matched request has finished loading."""
@@ -471,10 +471,7 @@ def capture_responses(
                 auto_scroll
                 and not is_break
                 and now >= next_scroll_at
-                and (
-                    not waiting_for_graphql
-                    or graphql_response_finished_since_scroll
-                )
+                and (not waiting_for_graphql or graphql_response_finished_since_scroll)
             ):
                 # Wait for one completed pagination response before scrolling again.
                 did_scroll = scroll_to_pagination_trigger()
