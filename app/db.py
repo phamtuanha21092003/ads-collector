@@ -38,6 +38,10 @@ def system_configs_collection(settings: Settings) -> AsyncIOMotorCollection:
     return get_db(settings)["system_configs"]
 
 
+def products_collection(settings: Settings) -> AsyncIOMotorCollection:
+    return get_db(settings)["products"]
+
+
 async def ensure_indexes(settings: Settings) -> None:
     jobs = jobs_collection(settings)
     ads = ads_collection(settings)
