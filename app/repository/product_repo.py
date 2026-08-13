@@ -3,6 +3,7 @@ from urllib.parse import urlsplit, urlunsplit
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 from app.model.product_model import ProductModel
+from app.util.format_url_util import canonical_product_url
 
 
 class ProductRepository:
@@ -20,7 +21,7 @@ class ProductRepository:
         keywords: list[str],
     ) -> ProductModel:
         """Keep one product per canonical product URL while retaining all source jobs."""
-        link_url = self._clean_product_url(link_url)
+        link_url = canonical_product_url(link_url)
         return self._collection.update_one(
             {"linkUrl": link_url},
             {
@@ -66,7 +67,7 @@ class ProductRepository:
         active_ads_count: int,
         highest_impression_rank: int | None,
     ) -> None:
-        link_url = self._clean_product_url(link_url)
+        link_url = canonical_product_url(link_url)
         await self._collection.update_one(
             {"linkUrl": link_url},
             {

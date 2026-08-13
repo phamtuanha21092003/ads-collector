@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
+from app.util.format_url_util import canonical_product_url
 
 
 def build_url(keyword: str, country: str) -> str:
@@ -110,7 +111,7 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
         "cta_text": card_or_snapshot("cta_text"),
         "cta_type": card_or_snapshot("cta_type"),
         "display_format": snapshot.get("display_format"),
-        "link_url": card_or_snapshot("link_url"),
+        "link_url": canonical_product_url(card_or_snapshot("link_url")),
         "link_description": card_or_snapshot("link_description"),
         "images": [
             extract_image(image) for image in raw_images if isinstance(image, dict)
