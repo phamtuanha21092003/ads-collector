@@ -374,6 +374,7 @@ class WorkerLoop:
                 media_type=parent.media_type,
                 metadata={"parentJobId": str(parent.id)},
                 rootId=rootId,
+                primary_keyword=parent.keyword,
             )
             child = await self._job_repo.create_pending(child)
             assert child.id is not None
@@ -429,14 +430,15 @@ class WorkerLoop:
         # Meta collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
         # Guard all shared mutable state and check-then-act spawn/upsert logic.
         state_lock = threading.Lock()
-        product_links: set[str] = set()
+        # Maps each product URL to its best position in Ads Library's impression sort.
+        product_ranks: dict[str, int] = {}
         should_analyze = (
             spawn_domains_immediately and job.level and job.level < MAX_LEVEL_SEARCH
         )
         # Jobs without an explicit root are roots themselves.
         rootId = job.rootId or job.id
 
-        def on_ad(raw: dict[str, Any], link_ads_url: str) -> None:
+        def on_ad(raw: dict[str, Any], link_ads_url: str, impression_rank: int) -> None:
             nonlocal new_saved
             if not (raw.get("cta_type") == "SHOP_NOW" and raw.get("link_url")):
                 return
@@ -478,10 +480,11 @@ class WorkerLoop:
                     seen_ad_ids.add(ad_id)
                     new_saved += 1
                     if should_analyze:
-                        keyword = self._analyzer._llm_analyze_keyword(
+                        result_keyword = self._analyzer._llm_analyze_keyword(
                             title=raw.get("title"), content=raw.get("body")
                         )
-                        keywords.append(keyword)
+                        if result_keyword:
+                            keywords.append(result_keyword)
 
                 total = len(seen_ad_ids)
                 store_total = len(pending_domains) if pending_domains is not None else 0
@@ -540,10 +543,20 @@ class WorkerLoop:
                             link_url=product_url,
                             shop=shop,
                             link_ads_url=link_ads_url,
+                            keywords=[
+                                (
+                                    job.keyword
+                                    if spawn_domains_immediately
+                                    else job.primary_keyword
+                                )
+                            ],
                         ),
                         loop,
                     ).result()
-                    product_links.add(product_url)
+                    with state_lock:
+                        current_rank = product_ranks.get(product_url)
+                        if current_rank is None or impression_rank < current_rank:
+                            product_ranks[product_url] = impression_rank
 
             except Exception as exc:
                 logger.warning("Could not collect product from {!r}: {}", link_url, exc)
@@ -599,14 +612,10 @@ class WorkerLoop:
                     keyword=keyword,
                     rootId=rootId,
                 ),
-        should_update_product = (
-            not spawn_domains_immediately and len(list(product_links)) > 0
-        )
-        if should_update_product:
+        if not spawn_domains_immediately and product_ranks:
             await self._update_sumary_count(
-                product_links=list(product_links), store_ads=new_saved
-            ),
-        # storeAdsCount
+                product_ranks=product_ranks, store_ads=new_saved
+            )
         return new_saved, fetched
 
     async def _process_keyword_job(
@@ -747,8 +756,10 @@ class WorkerLoop:
         assert child.id is not None
         await self._publish_job(child.id)
 
-    async def _update_sumary_count(self, product_links: list[str], store_ads: int):
-        for product_url in product_links:
+    async def _update_sumary_count(
+        self, product_ranks: dict[str, int], store_ads: int
+    ) -> None:
+        for product_url, impression_rank in product_ranks.items():
             active_ads_count = await self._ad_repo.count_active_by_product_url(
                 product_url
             )
@@ -756,4 +767,5 @@ class WorkerLoop:
                 link_url=product_url,
                 store_ads_count=store_ads,
                 active_ads_count=active_ads_count,
-            ),
+                highest_impression_rank=impression_rank,
+            )

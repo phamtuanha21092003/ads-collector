@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from app.config import Settings
 import json
 
@@ -108,11 +108,15 @@ class AIClient:
         client = self._get_client()
         prompt = self._prepare_keyword(title=title, content=content)
 
-        response = client.responses.create(
-            model=self.settings.openai_model,
-            instructions="You are an expert e-commerce advertising analyst.",
-            input=prompt,
-        )
+        try:
+            response = client.responses.create(
+                model=self.settings.openai_model,
+                instructions="You are an expert e-commerce advertising analyst.",
+                input=prompt,
+            )
+        except RateLimitError:
+            log.warning("AI rate limit reached; skipping keyword analysis")
+            return ""
         return response.choices[0]["message"]["content"]
 
     def _llm_group_keywords(
@@ -123,11 +127,15 @@ class AIClient:
             keywords=keywords, existing_keywords=existing_keywords
         )
         list_key = []
-        response = client.responses.create(
-            model=self.settings.openai_model,
-            instructions="You are an expert e-commerce advertising analyst.",
-            input=prompt,
-        )
+        try:
+            response = client.responses.create(
+                model=self.settings.openai_model,
+                instructions="You are an expert e-commerce advertising analyst.",
+                input=prompt,
+            )
+        except RateLimitError:
+            log.warning("AI rate limit reached; skipping keyword grouping")
+            return []
         content = json.loads(response.choices[0]["message"]["content"])
         for g in content["groups"]:
             list_key.append(g["representative_keyword"])

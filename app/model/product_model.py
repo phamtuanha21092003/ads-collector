@@ -12,4 +12,7 @@ class ProductModel(MongoBaseModel):
     )
     productAdsCount: int | None = None
     storeAdsCount: int | None = None
+    adsCreatedLast3Weeks: int | None = None
+    highestImpressionRankLast3Weeks: int | None = None
+    keywords: list[str] = Field(default_factory=list)
     linkUrl: str | None = None

@@ -98,3 +98,4 @@ class JobModel(MongoBaseModel):
     )
     level: int | None = None
     rootId: ObjectId | None = None
+    primary_keyword: str | None = None

@@ -25,7 +25,7 @@ from tenacity import (
 
 from app.service.proxy_scrape import ProxyScrapeService
 
-OnAdCallback = Callable[[dict[str, Any], str], None]
+OnAdCallback = Callable[[dict[str, Any], str, int], None]
 
 META_PAGE_SIZE = 30
 
@@ -206,7 +206,9 @@ class MetaCollectorService:
                 return
             if futures:
                 self._raise_if_failed(futures)
-            futures.append(_executor.submit(on_ad, ad, link_ads_url))
+            # The crawler returns this list in descending total-impressions order.
+            rank = count + 1
+            futures.append(_executor.submit(on_ad, ad, link_ads_url, rank))
             count += 1
 
         try:
