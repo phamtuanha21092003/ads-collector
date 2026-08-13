@@ -1,32 +1,12 @@
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import dns.resolver
 import requests
+from app.util.format_url_util import canonical_product_url
 
 SHOPIFY_IPS = {
     "23.227.38.65",
 }
-
-
-def canonical_product_url(url: str) -> str | None:
-    """Return Shopify's query-free product JSON URL from a product handle URL."""
-    if not isinstance(url, str) or not url.strip():
-        return None
-    value = url.strip()
-    if not value.startswith(("http://", "https://")):
-        value = f"https://{value}"
-    parsed = urlparse(value)
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    path = parsed.path.rstrip("/")
-    if not path.startswith("/products/"):
-        return None
-    handle = path.removeprefix("/products/")
-    if not handle or "/" in handle:
-        return None
-    if not handle.endswith(".json"):
-        path = f"{path}.json"
-    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
 
 
 def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None:
@@ -47,7 +27,7 @@ def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None
     product = payload.get("product") if isinstance(payload, dict) else None
     if not isinstance(product, dict):
         return None
-    return url, product
+    return product_url, product
 
 
 def extract_domain(url: str) -> str | None:
