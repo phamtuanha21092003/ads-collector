@@ -25,7 +25,7 @@ from tenacity import (
 
 from app.service.proxy_scrape import ProxyScrapeService
 
-OnAdCallback = Callable[[dict[str, Any]], None]
+OnAdCallback = Callable[[dict[str, Any], str], None]
 
 META_PAGE_SIZE = 30
 
@@ -197,7 +197,7 @@ class MetaCollectorService:
         count = 0
         futures: list[Future[None]] = []
 
-        def handle_captured_ad(ad: dict[str, Any]) -> None:
+        def handle_captured_ad(ad: dict[str, Any], link_ads_url: str) -> None:
             """Dispatch each ad while its GraphQL response is being captured."""
             nonlocal count
             if on_ad is None:
@@ -206,7 +206,7 @@ class MetaCollectorService:
                 return
             if futures:
                 self._raise_if_failed(futures)
-            futures.append(_executor.submit(on_ad, ad))
+            futures.append(_executor.submit(on_ad, ad, link_ads_url))
             count += 1
 
         try:

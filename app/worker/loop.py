@@ -14,7 +14,12 @@ from bson.errors import InvalidId
 from loguru import logger
 from app.ai_client import AIClient
 from app.config import Settings
-from app.db import ads_collection, jobs_collection, products_collection, shops_collection
+from app.db import (
+    ads_collection,
+    jobs_collection,
+    products_collection,
+    shops_collection,
+)
 from app.model.ad_model import AdModel
 from app.model.job_model import JobModel, JobType
 from app.mq import RETRY_COUNT_HEADER, declare_jobs_queue
@@ -47,7 +52,9 @@ class WorkerLoop:
         self._settings = settings
         self._job_repo = job_repo or JobRepository(jobs_collection(settings))
         self._ad_repo = ad_repo or AdRepository(ads_collection(settings))
-        self._product_repo = product_repo or ProductRepository(products_collection(settings))
+        self._product_repo = product_repo or ProductRepository(
+            products_collection(settings)
+        )
         self._shop_repo = shop_repo or ShopRepository(
             shops_collection(settings), settings
         )
@@ -352,7 +359,7 @@ class WorkerLoop:
                     parent.id,
                     count,
                 )
-                continue
+                # continue
 
             child = JobModel(
                 keyword=domain,
@@ -422,13 +429,14 @@ class WorkerLoop:
         # Meta collector runs on_ad on a ThreadPoolExecutor (max 4 workers).
         # Guard all shared mutable state and check-then-act spawn/upsert logic.
         state_lock = threading.Lock()
+        product_links: set[str] = set()
         should_analyze = (
             spawn_domains_immediately and job.level and job.level < MAX_LEVEL_SEARCH
         )
         # Jobs without an explicit root are roots themselves.
         rootId = job.rootId or job.id
 
-        def on_ad(raw: dict[str, Any]) -> None:
+        def on_ad(raw: dict[str, Any], link_ads_url: str) -> None:
             nonlocal new_saved
             if not (raw.get("cta_type") == "SHOP_NOW" and raw.get("link_url")):
                 return
@@ -521,19 +529,22 @@ class WorkerLoop:
                 loop,
             ).result()
 
-            # Product failures must not fail the ad-collection job.
             try:
                 product_result = get_product_from_url(link_url)
                 if product_result is not None:
                     product_url, product = product_result
-                    asyncio.run_coroutine_threadsafe(
+                    product = asyncio.run_coroutine_threadsafe(
                         self._product_repo.upsert_one(
                             product=product,
                             job_ids=[job.id, rootId],
                             link_url=product_url,
+                            shop=shop,
+                            link_ads_url=link_ads_url,
                         ),
                         loop,
                     ).result()
+                    product_links.add(product_url)
+
             except Exception as exc:
                 logger.warning("Could not collect product from {!r}: {}", link_url, exc)
 
@@ -588,7 +599,14 @@ class WorkerLoop:
                     keyword=keyword,
                     rootId=rootId,
                 ),
-
+        should_update_product = (
+            not spawn_domains_immediately and len(list(product_links)) > 0
+        )
+        if should_update_product:
+            await self._update_sumary_count(
+                product_links=list(product_links), store_ads=new_saved
+            ),
+        # storeAdsCount
         return new_saved, fetched
 
     async def _process_keyword_job(
@@ -728,3 +746,14 @@ class WorkerLoop:
         child = await self._job_repo.create_pending(job)
         assert child.id is not None
         await self._publish_job(child.id)
+
+    async def _update_sumary_count(self, product_links: list[str], store_ads: int):
+        for product_url in product_links:
+            active_ads_count = await self._ad_repo.count_active_by_product_url(
+                product_url
+            )
+            await self._product_repo.update_ad_counts(
+                link_url=product_url,
+                store_ads_count=store_ads,
+                active_ads_count=active_ads_count,
+            ),

@@ -1,3 +1,5 @@
+import re
+
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import UpdateOne
@@ -18,12 +20,7 @@ class AdRepository:
         keywords = [keyword for keyword in ad.keywords if keyword]
         job_ids = [job_id for job_id in ad.job_ids if job_id is not None]
         await self._collection.update_one(
-            {
-                "$or": [
-                    {"raw.link_url": ad.raw["link_url"]},
-                    {"adId": ad.ad_id},
-                ]
-            },
+            {"adId": ad.ad_id},
             {
                 "$addToSet": {
                     "keywords": {"$each": keywords},
@@ -96,6 +93,17 @@ class AdRepository:
 
     async def count_by_job(self, job_id: ObjectId) -> int:
         return await self._collection.count_documents({"jobIds": job_id})
+
+    async def count_by_shop(self, shop: str) -> int:
+        return await self._collection.count_documents({"shop": shop})
+
+    async def count_active_by_product_url(self, product_url: str) -> int:
+        # Raw URLs may contain tracking parameters, but must target this handle.
+        product_page_url = product_url.removesuffix(".json")
+        link_pattern = rf"^{re.escape(product_page_url)}(?:[/?#]|$)"
+        return await self._collection.count_documents(
+            {"raw.link_url": {"$regex": link_pattern}, "raw.is_active": True}
+        )
 
     async def update_ads_qualified(
         self,

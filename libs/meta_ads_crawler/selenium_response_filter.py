@@ -15,6 +15,7 @@ from libs.meta_ads_collector.exceptions import RateLimitError
 from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
 
+OnAdCallback = Callable[[dict[str, Any], str], None]
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
 
 
@@ -121,7 +122,7 @@ class MetaAdsCrawler:
         ad_type: str = AD_TYPE_ALL,
         status: str = STATUS_ACTIVE,
         max_results: int | None = None,
-        on_ad: Callable[[dict[str, Any]], None] | None = None,
+        on_ad: OnAdCallback | None = None,
         stop_check: Callable[[], None] | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
         filter_config: str | None = None,
@@ -209,8 +210,8 @@ class MetaAdsCrawler:
                 f"{parameter_name} must use YYYY-MM-DD format, got {value!r}"
             ) from error
 
-    @staticmethod
     def _build_search_url(
+        self,
         query: str,
         country: str,
         ad_type: str,
@@ -248,7 +249,7 @@ def capture_responses(
     auto_scroll: bool,
     scroll_interval_seconds: float,
     proxy: str | ProxyPool | None = None,
-    on_ad: Callable[[dict[str, Any]], None] | None = None,
+    on_ad: OnAdCallback | None = None,
     stop_check: Callable[[], None] | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
@@ -288,7 +289,7 @@ def capture_responses(
             if normalized_id not in emitted_ad_ids:
                 emitted_ad_ids.add(normalized_id)
                 try:
-                    on_ad(ad)
+                    on_ad(ad, page_url)
                 except Exception:
                     callback_raised = True
                     raise

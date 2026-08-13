@@ -39,16 +39,15 @@ def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None
         timeout=timeout,
         headers={"User-Agent": "Mozilla/5.0"},
     )
-    if (
-        response.status_code != 200
-        or not response.headers.get("Content-Type", "").startswith("application/json")
-    ):
+    if response.status_code != 200 or not response.headers.get(
+        "Content-Type", ""
+    ).startswith("application/json"):
         return None
     payload = response.json()
     product = payload.get("product") if isinstance(payload, dict) else None
     if not isinstance(product, dict):
         return None
-    return product_url, product
+    return url, product
 
 
 def extract_domain(url: str) -> str | None:
@@ -77,9 +76,8 @@ def is_shopify_domain(domain: str, timeout: int = 10) -> bool:
         for answer in answers:
             cname = str(answer.target).rstrip(".").lower()
 
-            if (
-                cname.endswith(".myshopify.com")
-                or cname.endswith(".shops.myshopify.com")
+            if cname.endswith(".myshopify.com") or cname.endswith(
+                ".shops.myshopify.com"
             ):
                 return True
 
@@ -128,10 +126,9 @@ def is_shopify_domain(domain: str, timeout: int = 10) -> bool:
             headers={"User-Agent": "Mozilla/5.0"},
         )
 
-        if (
-            product_response.status_code == 200
-            and product_response.headers.get("Content-Type", "").startswith("application/json")
-        ):
+        if product_response.status_code == 200 and product_response.headers.get(
+            "Content-Type", ""
+        ).startswith("application/json"):
             data = product_response.json()
 
             if isinstance(data, dict) and "products" in data:
