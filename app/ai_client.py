@@ -63,7 +63,7 @@ class AIClient:
         """
         return prompt
 
-    def _prepare_group_keyword(seft, keywords: list[str], existing_keywords: list[str]):
+    def _prepare_group_keyword(self, keywords: list[str], existing_keywords: list[str]):
         existing_keywords_bullets = "\n".join(f"- {kw}" for kw in existing_keywords)
         keywords_bullets = "\n".join(f"- {kw}" for kw in keywords)
         prompt = f""" 
