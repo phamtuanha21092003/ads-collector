@@ -12,11 +12,11 @@ def canonical_product_url(url: str, include_json: bool = False) -> str | None:
     if not parsed.scheme or not parsed.netloc:
         return None
     path = parsed.path.rstrip("/")
-    if not path.startswith("/products/"):
+    if include_json and not path.startswith("/products/"):
         return None
     handle = path.removeprefix("/products/")
-    if not handle or "/" in handle:
-        return None
+    # if not handle or "/" in handle:
+    #     return None
     if include_json and not handle.endswith(".json"):
         path = f"{path}.json"
     elif not include_json:

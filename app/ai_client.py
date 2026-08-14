@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from typing import Any
 from openai import OpenAI, RateLimitError
 from app.config import Settings
 import json
@@ -94,6 +95,25 @@ class AIClient:
         {keywords_bullets} """
         return prompt
 
+    def _prepare_keyword_batch(self, ads: list[tuple[str | None, str | None]]) -> str:
+        items = "\n".join(
+            f"{index}. TITLE: {title or ''}\nCONTENT: {content or ''}"
+            for index, (title, content) in enumerate(ads, start=1)
+        )
+        return f"""
+        Analyze each e-commerce ad below and identify its exact product type plus
+        its most distinctive feature. Return JSON only, exactly in this form:
+        {{"keywords": ["keyword for ad 1", "keyword for ad 2"]}}
+
+        Rules: return one concise English noun phrase (3-6 words) per ad; do not
+        use brand names, shop names, URL slugs, generic marketing terms, markdown,
+        or explanations. The keywords array must have exactly {len(ads)} entries;
+        use an empty string when an ad cannot be determined.
+
+        ADS:
+        {items}
+        """
+
     def _raise_http(
         self,
         status_code: int,
@@ -103,6 +123,24 @@ class AIClient:
                 f"AI auth failed ({status_code}).",
                 status_code=401,
             )
+
+    @staticmethod
+    def _response_text(response: object) -> str:
+        """Extract text from an OpenAI Responses API result."""
+        output_text = getattr(response, "output_text", None)
+        if not isinstance(output_text, str) or not output_text.strip():
+            raise ValueError("OpenAI Responses API returned no text output")
+        return output_text
+
+    def _response_json(self, response: object) -> Any:
+        """Parse a Responses API result, accepting an optional Markdown fence."""
+        content = self._response_text(response).strip()
+        if content.startswith("```"):
+            lines = content.splitlines()
+            if len(lines) < 3 or lines[-1].strip() != "```":
+                raise ValueError("OpenAI response has an incomplete JSON code fence")
+            content = "\n".join(lines[1:-1]).strip()
+        return json.loads(content)
 
     def _llm_analyze_keyword(self, title: str, content: str) -> str:
         client = self._get_client()
@@ -117,7 +155,35 @@ class AIClient:
         except RateLimitError:
             log.warning("AI rate limit reached; skipping keyword analysis")
             return ""
-        return response.choices[0]["message"]["content"]
+        print(response)
+        return self._response_text(response)
+
+    def _llm_analyze_keywords(
+        self, ads: list[tuple[str | None, str | None]]
+    ) -> list[str]:
+        if not ads:
+            return []
+        client = self._get_client()
+        try:
+            response = client.responses.create(
+                model=self.settings.openai_model,
+                instructions="You are an expert e-commerce advertising analyst.",
+                input=self._prepare_keyword_batch(ads),
+            )
+            data = self._response_json(response)
+            keywords = data.get("keywords") if isinstance(data, dict) else None
+            if not isinstance(keywords, list) or len(keywords) != len(ads):
+                raise ValueError("AI keyword batch response has an invalid shape")
+            return [
+                keyword.strip() if isinstance(keyword, str) else ""
+                for keyword in keywords
+            ]
+        except RateLimitError:
+            log.warning("AI rate limit reached; skipping keyword batch analysis")
+            return []
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+            log.warning("Invalid AI keyword batch response: %s", exc)
+            return []
 
     def _llm_group_keywords(
         self, keywords: list[str], existing_keywords: list[str]
@@ -136,7 +202,18 @@ class AIClient:
         except RateLimitError:
             log.warning("AI rate limit reached; skipping keyword grouping")
             return []
-        content = json.loads(response.choices[0]["message"]["content"])
-        for g in content["groups"]:
-            list_key.append(g["representative_keyword"])
+        try:
+            content = self._response_json(response)
+            groups = content.get("groups") if isinstance(content, dict) else None
+            if not isinstance(groups, list):
+                raise ValueError("AI keyword grouping response has an invalid shape")
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                keyword = group.get("representative_keyword")
+                if isinstance(keyword, str) and keyword.strip():
+                    list_key.append(keyword.strip())
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+            log.warning("Invalid AI keyword grouping response: %s", exc)
+            return []
         return list_key

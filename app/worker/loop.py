@@ -33,9 +33,11 @@ from app.util.shopify_util import (
     get_product_from_url,
     is_shopify_domain,
 )
+from app.util.format_url_util import canonical_product_url
 
 DOMAIN_WINDOW_DAYS = 30
 MAX_LEVEL_SEARCH = 3
+KEYWORD_ANALYSIS_BATCH_SIZE = 10
 
 
 class WorkerLoop:
@@ -424,6 +426,8 @@ class WorkerLoop:
         loop = asyncio.get_running_loop()
         new_saved = 0
         keywords: list[str] = []
+        # Keep only the first captured ad copy for each product.
+        keyword_analysis_inputs: dict[str, tuple[str | None, str | None]] = {}
         must_reach = int(job.must_reach or 0)
         store_must_reach = int(job.store_must_reach or 0)
         spawned_domains: set[str] = set()
@@ -432,6 +436,7 @@ class WorkerLoop:
         state_lock = threading.Lock()
         # Maps each product URL to its best position in Ads Library's impression sort.
         product_ranks: dict[str, int] = {}
+        product_shops: dict[str, str] = {}
         should_analyze = (
             spawn_domains_immediately and job.level and job.level < MAX_LEVEL_SEARCH
         )
@@ -450,6 +455,7 @@ class WorkerLoop:
             link_domain = extract_domain(link_url)
             if not link_domain:
                 return
+            product_url = canonical_product_url(link_url)
 
             with state_lock:
                 is_new_domain = False
@@ -479,12 +485,15 @@ class WorkerLoop:
                 if not is_duplicate_ad:
                     seen_ad_ids.add(ad_id)
                     new_saved += 1
-                    if should_analyze:
-                        result_keyword = self._analyzer._llm_analyze_keyword(
-                            title=raw.get("title"), content=raw.get("body")
+                    if (
+                        should_analyze
+                        and product_url
+                        and product_url not in keyword_analysis_inputs
+                    ):
+                        keyword_analysis_inputs[product_url] = (
+                            raw.get("title"),
+                            raw.get("body"),
                         )
-                        if result_keyword:
-                            keywords.append(result_keyword)
 
                 total = len(seen_ad_ids)
                 store_total = len(pending_domains) if pending_domains is not None else 0
@@ -535,7 +544,7 @@ class WorkerLoop:
             try:
                 product_result = get_product_from_url(link_url)
                 if product_result is not None:
-                    product_url, product = product_result
+                    _, product = product_result
                     product = asyncio.run_coroutine_threadsafe(
                         self._product_repo.upsert_one(
                             product=product,
@@ -554,6 +563,7 @@ class WorkerLoop:
                         loop,
                     ).result()
                     with state_lock:
+                        product_shops.setdefault(product_url, shop)
                         current_rank = product_ranks.get(product_url)
                         if current_rank is None or impression_rank < current_rank:
                             product_ranks[product_url] = impression_rank
@@ -600,8 +610,19 @@ class WorkerLoop:
             on_ad=on_ad,
             status_filter=job.status_filter,
         )
-
         if should_analyze:
+            unique_keyword_analysis_inputs = list(keyword_analysis_inputs.values())
+            for index in range(
+                0, len(unique_keyword_analysis_inputs), KEYWORD_ANALYSIS_BATCH_SIZE
+            ):
+                batch = unique_keyword_analysis_inputs[
+                    index : index + KEYWORD_ANALYSIS_BATCH_SIZE
+                ]
+                batch_keywords = await asyncio.to_thread(
+                    self._analyzer._llm_analyze_keywords, batch
+                )
+                keywords.extend(keyword for keyword in batch_keywords if keyword)
+        if should_analyze and keywords:
             exsting_keywords = await self._job_repo.get_existing_keyword(rootId)
             group_keyword = self._analyzer._llm_group_keywords(
                 keywords=keywords, existing_keywords=exsting_keywords
@@ -614,7 +635,9 @@ class WorkerLoop:
                 ),
         if not spawn_domains_immediately and product_ranks:
             await self._update_sumary_count(
-                product_ranks=product_ranks, store_ads=new_saved
+                product_ranks=product_ranks,
+                product_shops=product_shops,
+                store_ads=new_saved,
             )
         return new_saved, fetched
 
@@ -757,15 +780,28 @@ class WorkerLoop:
         await self._publish_job(child.id)
 
     async def _update_sumary_count(
-        self, product_ranks: dict[str, int], store_ads: int
+        self,
+        product_ranks: dict[str, int],
+        product_shops: dict[str, str],
+        store_ads: int,
     ) -> None:
+        store_recent_ad_counts: dict[str, int] = {}
         for product_url, impression_rank in product_ranks.items():
             active_ads_count = await self._ad_repo.count_active_by_product_url(
                 product_url
             )
+            shop = product_shops.get(product_url)
+            ads_created_last_3_weeks = 0
+            if shop and shop not in store_recent_ad_counts:
+                store_recent_ad_counts[shop] = (
+                    await self._ad_repo.count_created_last_3_weeks_by_shop(shop)
+                )
+            if shop:
+                ads_created_last_3_weeks = store_recent_ad_counts[shop]
             await self._product_repo.update_ad_counts(
                 link_url=product_url,
                 store_ads_count=store_ads,
                 active_ads_count=active_ads_count,
                 highest_impression_rank=impression_rank,
+                ads_created_last_3_weeks=ads_created_last_3_weeks,
             )

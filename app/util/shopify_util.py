@@ -11,7 +11,7 @@ SHOPIFY_IPS = {
 
 def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None:
     """Fetch a Shopify product payload from a raw ad product URL."""
-    product_url = canonical_product_url(url)
+    product_url = canonical_product_url(url=url, include_json=True)
     if product_url is None:
         return None
     response = requests.get(

@@ -65,6 +65,7 @@ class ProductRepository:
         link_url: str,
         store_ads_count: int,
         active_ads_count: int,
+        ads_created_last_3_weeks: int,
         highest_impression_rank: int | None,
     ) -> None:
         link_url = canonical_product_url(link_url)
@@ -74,7 +75,7 @@ class ProductRepository:
                 "$set": {
                     "storeAdsCount": store_ads_count,
                     "productAdsCount": active_ads_count,
-                    "adsCreatedLast3Weeks": store_ads_count,
+                    "adsCreatedLast3Weeks": ads_created_last_3_weeks,
                     "highestImpressionRankLast3Weeks": highest_impression_rank,
                 }
             },

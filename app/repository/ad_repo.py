@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -96,6 +97,16 @@ class AdRepository:
 
     async def count_by_shop(self, shop: str) -> int:
         return await self._collection.count_documents({"shop": shop})
+
+    async def count_created_last_3_weeks_by_shop(self, shop: str) -> int:
+        """Count ads whose Meta delivery start time is within the last 21 days."""
+        cutoff = (utc_now() - timedelta(weeks=3)).isoformat()
+        return await self._collection.count_documents(
+            {
+                "shop": shop,
+                "raw.delivery_start_time": {"$gte": cutoff},
+            }
+        )
 
     async def count_active_by_product_url(self, product_url: str) -> int:
         # Raw URLs may contain tracking parameters, but must target this handle.
