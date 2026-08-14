@@ -548,7 +548,7 @@ class WorkerLoop:
                     product = asyncio.run_coroutine_threadsafe(
                         self._product_repo.upsert_one(
                             product=product,
-                            job_ids=[job.id, rootId],
+                            job_ids=[job.id, self._parent_job_id(job.metadata), rootId],
                             link_url=product_url,
                             shop=shop,
                             link_ads_url=link_ads_url,

@@ -22,6 +22,7 @@ class ProductRepository:
     ) -> ProductModel:
         """Keep one product per canonical product URL while retaining all source jobs."""
         link_url = canonical_product_url(link_url)
+        _job_ids = [job_id for job_id in job_ids if job_id is not None]
         return self._collection.update_one(
             {"linkUrl": link_url},
             {
@@ -32,7 +33,7 @@ class ProductRepository:
                     "linkAdsUrl": link_ads_url,
                 },
                 "$addToSet": {
-                    "jobIds": {"$each": job_ids},
+                    "jobIds": {"$each": _job_ids},
                     "keywords": {
                         "$each": [
                             keyword
