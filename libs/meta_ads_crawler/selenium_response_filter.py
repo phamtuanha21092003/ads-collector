@@ -128,7 +128,7 @@ class MetaAdsCrawler:
         filter_config: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
-        capture_duration_seconds: float | None = 60,
+        capture_duration_seconds: float | None = 120,
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
         proxy: str | ProxyPool | None = None,

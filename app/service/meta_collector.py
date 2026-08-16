@@ -220,7 +220,6 @@ class MetaCollectorService:
                 max_results=max_results,
                 start_date=start_date,
                 end_date=end_date,
-                capture_duration_seconds=None if on_ad is not None else 30,
                 proxy=active_proxy,
                 on_ad=handle_captured_ad if on_ad is not None else None,
                 stop_check=(

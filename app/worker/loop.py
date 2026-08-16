@@ -361,7 +361,7 @@ class WorkerLoop:
                     parent.id,
                     count,
                 )
-                # continue
+                continue
 
             child = JobModel(
                 keyword=domain,
