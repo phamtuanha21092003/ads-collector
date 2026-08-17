@@ -34,6 +34,7 @@ from app.util.shopify_util import (
     is_shopify_domain,
 )
 from app.util.format_url_util import canonical_product_url
+from app.util.telegram_util import send_telegram_message
 
 DOMAIN_WINDOW_DAYS = 30
 MAX_LEVEL_SEARCH = 3
@@ -135,8 +136,32 @@ class WorkerLoop:
                 job.start_date,
                 job.end_date,
             )
+            level = job.level if job.type != "domain" else "domain"
+
+            telegram_message = (
+                f"🚀 Crawl job\n"
+                f"Job ID: {job.id}\n"
+                f"Keyword: {job.keyword}\n"
+                f"Type: {job.type}\n"
+                f"Level: {level}\n"
+                f"Attempt: {retry_count + 1}/{self._settings.rabbitmq_max_retries}\n"
+            )
+
+            send_telegram_message(
+                message=telegram_message,
+            )
             await self._process_job(job)
             await message.ack()
+            telegram_done_message = (
+                f"✅ Crawl job done\n"
+                f"Job ID: {job.id}\n"
+                f"Keyword: {job.keyword}\n"
+                f"Type: {job.type}\n"
+                f"Level: {level}\n"
+            )
+            send_telegram_message(
+                message=telegram_done_message,
+            )
         except Exception as exc:
             logger.exception(
                 "Job {} failed on attempt {}/{}: {}",
@@ -195,6 +220,21 @@ class WorkerLoop:
 
         if job is not None and job.id is not None:
             await self._job_repo.mark_failed(job.id, str(error))
+
+            level = job.level if job.type != "domain" else "domain"
+
+            telegram_failed_message = (
+                f"❌ Crawl job failed\n"
+                f"Job ID: {job.id}\n"
+                f"Keyword: {job.keyword}\n"
+                f"Type: {job.type}\n"
+                f"Level: {level}\n"
+                f"Attempt: {retry_count + 1}/{self._settings.rabbitmq_max_retries}\n"
+            )
+
+            send_telegram_message(
+                message=telegram_failed_message,
+            )
 
         await message.reject(requeue=False)
         logger.error(
