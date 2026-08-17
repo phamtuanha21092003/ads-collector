@@ -38,6 +38,8 @@ from app.util.format_url_util import canonical_product_url
 DOMAIN_WINDOW_DAYS = 30
 MAX_LEVEL_SEARCH = 3
 KEYWORD_ANALYSIS_BATCH_SIZE = 10
+PRIORITY_DOMAIN = 1
+PRIORITY_KEYWORD = 10
 
 
 class WorkerLoop:
@@ -291,7 +293,7 @@ class WorkerLoop:
         )
         return await self._job_repo.create_running(job, self._settings.worker_id)
 
-    async def _publish_job(self, job_id: ObjectId) -> None:
+    async def _publish_job(self, job_id: ObjectId, priority: int) -> None:
         if self._channel is None or self._channel.is_closed:
             raise RuntimeError("RabbitMQ channel is not available for job publish")
 
@@ -300,6 +302,7 @@ class WorkerLoop:
                 body=json.dumps({"jobId": str(job_id)}).encode("utf-8"),
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
                 content_type="application/json",
+                priority=priority,
             ),
             routing_key=self._settings.rabbitmq_queue,
         )
@@ -387,7 +390,7 @@ class WorkerLoop:
                 parent_job_id=parent.id,
                 root_job_id=rootId,
             )
-            await self._publish_job(child.id)
+            await self._publish_job(child.id, PRIORITY_DOMAIN)
             logger.info(
                 "Spawned domain job {} keyword={!r} {} → {} from parent {}",
                 child.id,
@@ -638,7 +641,6 @@ class WorkerLoop:
             await self._update_sumary_count(
                 product_ranks=product_ranks,
                 product_shops=product_shops,
-                store_ads=new_saved,
             )
         return new_saved, fetched
 
@@ -778,30 +780,34 @@ class WorkerLoop:
         )
         child = await self._job_repo.create_pending(job)
         assert child.id is not None
-        await self._publish_job(child.id)
+        await self._publish_job(child.id, PRIORITY_KEYWORD)
 
     async def _update_sumary_count(
         self,
         product_ranks: dict[str, int],
         product_shops: dict[str, str],
-        store_ads: int,
     ) -> None:
         store_recent_ad_counts: dict[str, int] = {}
+        store_ads_counts: dict[str, int] = {}
         for product_url, impression_rank in product_ranks.items():
             active_ads_count = await self._ad_repo.count_active_by_product_url(
                 product_url
             )
             shop = product_shops.get(product_url)
             ads_created_last_3_weeks = 0
-            if shop and shop not in store_recent_ad_counts:
-                store_recent_ad_counts[shop] = (
-                    await self._ad_repo.count_created_last_3_weeks_by_shop(shop)
-                )
+            store_ads_count = 0
             if shop:
+                if shop not in store_recent_ad_counts:
+                    store_recent_ad_counts[shop] = (
+                        await self._ad_repo.count_created_last_3_weeks_by_shop(shop)
+                    )
+                if shop not in store_ads_counts:
+                    store_ads_counts[shop] = await self._ad_repo.count_by_shop(shop)
                 ads_created_last_3_weeks = store_recent_ad_counts[shop]
+                store_ads_count = store_ads_counts[shop]
             await self._product_repo.update_ad_counts(
                 link_url=product_url,
-                store_ads_count=store_ads,
+                store_ads_count=store_ads_count,
                 active_ads_count=active_ads_count,
                 highest_impression_rank=impression_rank,
                 ads_created_last_3_weeks=ads_created_last_3_weeks,
