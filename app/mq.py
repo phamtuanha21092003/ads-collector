@@ -54,6 +54,7 @@ async def declare_jobs_queue(
         arguments={
             "x-dead-letter-exchange": settings.rabbitmq_dlx,
             "x-dead-letter-routing-key": settings.rabbitmq_dlq_routing_key,
+            "x-max-priority": 10,
         },
     )
     return channel, queue

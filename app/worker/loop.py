@@ -230,6 +230,7 @@ class WorkerLoop:
 
         await self._channel.default_exchange.publish(
             aio_pika.Message(
+                priority=message.priority,
                 body=json.dumps(body_payload).encode("utf-8"),
                 headers=headers,
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
