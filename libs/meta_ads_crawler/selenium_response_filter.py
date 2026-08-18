@@ -81,8 +81,8 @@ def create_driver(
     proxy: str | None = None,
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
-    # if proxy:
-    #     options.add_argument(f"--proxy-server={proxy}")
+    if proxy:
+        options.add_argument(f"--proxy-server={proxy}")
     if headless:
         print("Running Chrome in headless mode.")
     chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
