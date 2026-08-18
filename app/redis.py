@@ -27,3 +27,9 @@ def connect(settings: Settings) -> Redis:
         print("CONNECT:", id(_redis_client), _redis_client)
 
     return _redis_client
+
+
+def get_client() -> Redis:
+    if _redis_client is None:
+        raise RuntimeError("Redis is not connected")
+    return _redis_client

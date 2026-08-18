@@ -26,7 +26,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from app.redis import _redis_client
+from app.redis import get_client as get_redis
 
 from app.service.proxy_scrape import ProxyScrapeService
 from app.service.proxy_rotation import ProxyRotationService
@@ -72,8 +72,7 @@ class MetaCollectorService:
         self,
         proxies: list[str],
     ) -> tuple[str, str, str]:
-        if _redis_client is None:
-            raise RuntimeError("Redis is not connected")
+        redis_client = get_redis()
 
         while True:
             token = str(uuid.uuid4())
@@ -81,7 +80,7 @@ class MetaCollectorService:
             for proxy in proxies:
                 lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
 
-                acquired = _redis_client.set(
+                acquired = redis_client.set(
                     lock_key,
                     token,
                     nx=True,
@@ -94,7 +93,7 @@ class MetaCollectorService:
             for slot in range(EMPTY_PROXY_SLOTS):
                 lock_key = f"{EMPTY_PROXY_LOCK_PREFIX}{slot}"
 
-                acquired = _redis_client.set(
+                acquired = redis_client.set(
                     lock_key,
                     token,
                     nx=True,
@@ -111,8 +110,7 @@ class MetaCollectorService:
         lock_key: str,
         token: str,
     ) -> None:
-        if _redis_client is None:
-            raise RuntimeError("Redis is not connected")
+        redis_client = get_redis()
 
         lua_script = """
         if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -122,7 +120,7 @@ class MetaCollectorService:
         return 0
         """
 
-        _redis_client.eval(
+        redis_client.eval(
             lua_script,
             1,
             lock_key,
