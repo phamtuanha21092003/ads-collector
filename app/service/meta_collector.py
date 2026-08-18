@@ -86,7 +86,7 @@ class MetaCollectorService:
                     lock_key,
                     token,
                     nx=True,
-                    ex=10*60
+                    ex=60*60
                 )
 
                 if acquired:
@@ -100,7 +100,7 @@ class MetaCollectorService:
                     lock_key,
                     token,
                     nx=True,
-                    ex=10*60
+                    ex=60*60
                 )
 
                 if acquired:
