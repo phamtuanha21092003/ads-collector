@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-import uuid
+import requests
 import time
 from collections.abc import Callable
 from datetime import date, datetime, time
@@ -90,6 +90,15 @@ class MetaCollectorService:
                 )
 
                 if acquired:
+                    response = requests.get(
+                        "https://spy.dropshiptools.xyz/api/health",
+                        proxies={
+                            "https": proxy,
+                        },
+                        timeout=30,
+                    )
+                    if response.status_code != 200:
+                        continue
                     return proxy, lock_key
 
             # Try 3 empty proxy slots
@@ -117,11 +126,11 @@ class MetaCollectorService:
         redis_client = get_redis()
 
         lua_script = """
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            return redis.call("DEL", KEYS[1])
-        end
+            if redis.call("GET", KEYS[1]) == ARGV[1] then
+                return redis.call("DEL", KEYS[1])
+            end
 
-        return 0
+            return 0
         """
 
         redis_client.eval(
@@ -276,7 +285,7 @@ class MetaCollectorService:
         end_date: str | None,
     ) -> int:
         proxies: list[str] = []
-        if self._proxy_rotation_service:
+        if not self._proxy_rotation_service is None:
             proxies = self._proxy_rotation_service._proxies
         token = os.getenv("pm_id", "")
         proxy, lock_key= self.get_proxy(proxies, token)

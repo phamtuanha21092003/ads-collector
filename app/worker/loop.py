@@ -28,6 +28,7 @@ from app.repository.job_repo import JobRepository
 from app.repository.product_repo import ProductRepository
 from app.repository.shop_repo import ShopRepository
 from app.service.meta_collector import MetaCollectorService, ReachThresholdReached
+from app.repository.system_config_repo import SystemConfigRepository
 from app.util.shopify_util import (
     extract_domain,
     get_product_from_url,
@@ -35,6 +36,7 @@ from app.util.shopify_util import (
 )
 from app.util.format_url_util import canonical_product_url
 from app.util.telegram_util import send_telegram_message
+from app.db import system_configs_collection
 
 DOMAIN_WINDOW_DAYS = 30
 MAX_LEVEL_SEARCH = 3
@@ -650,6 +652,12 @@ class WorkerLoop:
                 raise ReachThresholdReached(
                     f"stores {store_total} > storeMustReach {store_must_reach}"
                 )
+
+        # fetch proxies from system config
+        if not self._meta._proxy_rotation_service is None:
+            await self._meta._proxy_rotation_service.load_from_mongo(
+                SystemConfigRepository(system_configs_collection(self._meta._settings))
+            )
 
         fetched = await asyncio.to_thread(
             self._meta.search,
