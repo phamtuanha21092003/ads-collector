@@ -3,6 +3,7 @@ from motor.motor_asyncio import (
     AsyncIOMotorCollection,
     AsyncIOMotorDatabase,
 )
+from pymongo.collection import Collection
 
 from app.config import Settings
 
@@ -40,6 +41,14 @@ def system_configs_collection(settings: Settings) -> AsyncIOMotorCollection:
 
 def products_collection(settings: Settings) -> AsyncIOMotorCollection:
     return get_db(settings)["products"]
+
+
+def proxy_logs_collection(settings: Settings) -> AsyncIOMotorCollection:
+    return get_db(settings)["proxy_logs"]
+
+
+def proxy_logs_sync_collection(settings: Settings) -> Collection:
+    return get_client(settings).delegate[settings.db_name]["proxy_logs"]
 
 
 async def close_client() -> None:

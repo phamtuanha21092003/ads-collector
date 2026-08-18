@@ -17,6 +17,7 @@ from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
 import random
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
+OnRequestLogCallback = Callable[..., None]
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
 CHROME_VERSIONS: list[tuple[str, str]] = [
     ("140", "140.0.7200.110"),
@@ -82,6 +83,14 @@ def create_driver(
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
     if proxy:
+        sanitized = proxy
+        if "@" in proxy:
+            parts = proxy.split("@")
+            scheme = ""
+            if "://" in parts[0]:
+                scheme = parts[0].split("://")[0] + "://"
+            sanitized = f"{scheme}{parts[-1]}"
+        print(f"Creating Chrome driver using proxy: {sanitized}")
         options.add_argument(f"--proxy-server={proxy}")
     if headless:
         print("Running Chrome in headless mode.")
@@ -208,6 +217,7 @@ class MetaAdsCrawler:
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
         proxy: str = None,
+        on_request_log: OnRequestLogCallback | None = None,
     ) -> list[dict[str, Any]]:
         """Capture Meta Ad Library responses and return normalized advertisements.
 
@@ -250,6 +260,7 @@ class MetaAdsCrawler:
             scroll_interval_seconds=scroll_interval_seconds,
             proxy=proxy,
             on_ad=on_ad,
+            on_request_log=on_request_log,
             stop_check=stop_check,
         )
 
@@ -326,6 +337,7 @@ def capture_responses(
     scroll_interval_seconds: float,
     proxy: str = None,
     on_ad: OnAdCallback | None = None,
+    on_request_log: OnRequestLogCallback | None = None,
     stop_check: Callable[[], None] | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
@@ -338,6 +350,7 @@ def capture_responses(
     loading_finished_ids: set[str] = set()
     captured_response_bodies: list[str | dict[str, Any]] = []
     processed_response_ids: set[str] = set()
+    logged_request_ids: set[str] = set()
     emitted_ad_ids: set[str] = set()
     callback_raised = False
     stop_check_raised = False
@@ -393,6 +406,33 @@ def capture_responses(
             or request_operation == request_body_filter
         )
 
+    def emit_request_log(
+        request_id: str,
+        *,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        if on_request_log is None or request_id in logged_request_ids:
+            return
+        request = request_details.get(request_id)
+        if request is None or not is_target_request(request):
+            return
+        response = response_details.get(request_id)
+        if error is None and response is None:
+            return
+        logged_request_ids.add(request_id)
+        started = request.get("started_at")
+        duration_ms = (
+            int((time.monotonic() - started) * 1000) if started is not None else None
+        )
+        status_code = (response or {}).get("status")
+        on_request_log(
+            url=request.get("url") or (response or {}).get("url") or "",
+            method=request.get("method"),
+            status_code=status_code,
+            duration_ms=duration_ms,
+            error=error,
+        )
+
     def scroll_to_pagination_trigger() -> bool:
         """Scroll to the current list end, which triggers Meta pagination."""
         if active_driver is None:
@@ -421,6 +461,8 @@ def capture_responses(
         if not is_target_request(request):
             processed_response_ids.add(request_id)
             return
+
+        emit_request_log(request_id)
 
         url = response.get("url", "")
         mime_type = response.get("mimeType", "")
@@ -503,6 +545,7 @@ def capture_responses(
                             "url": request.get("url"),
                             "postData": request.get("postData", ""),
                             "headers": request.get("headers", {}),
+                            "started_at": time.monotonic(),
                         }
                         capture_completed_response(request_id)
                     continue
@@ -514,12 +557,26 @@ def capture_responses(
                         capture_completed_response(request_id)
                     continue
 
+                if method == "Network.loadingFailed":
+                    request_id = params.get("requestId")
+                    if request_id:
+                        error_text = params.get("errorText") or "loadingFailed"
+                        emit_request_log(
+                            request_id,
+                            error={
+                                "message": error_text,
+                                "type": "loadingFailed",
+                            },
+                        )
+                    continue
+
                 if method != "Network.loadingFinished":
                     continue
 
                 request_id = params.get("requestId")
                 if request_id:
                     loading_finished_ids.add(request_id)
+                    emit_request_log(request_id)
                     capture_completed_response(request_id)
                     if (
                         waiting_for_graphql

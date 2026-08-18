@@ -4,13 +4,16 @@ import random
 import requests
 import time
 from collections.abc import Callable
-from datetime import date, datetime, time
+from datetime import date, datetime
+from datetime import time as dt_time
 from typing import Any
 from concurrent.futures import Future, ThreadPoolExecutor
 import os
 
 from loguru import logger
 from app.config import get_settings
+from app.model.proxy_log_model import ProxyLogModel, ProxyLogStatus
+from app.repository.proxy_log_repo import ProxyLogRepository
 from app.repository.system_config_repo import SystemConfigRepository
 from libs.meta_ads_collector import (
     FilterConfig,
@@ -31,13 +34,14 @@ from app.redis import get_client as get_redis
 
 from app.service.proxy_scrape import ProxyScrapeService
 from app.service.proxy_rotation import ProxyRotationService
-from app.db import close_client, system_configs_collection
+from app.db import close_client, proxy_logs_sync_collection, system_configs_collection
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
 
 PROXY_LOCK_PREFIX = "proxy:lock:"
 EMPTY_PROXY_LOCK_PREFIX = "proxy:lock:empty:"
 EMPTY_PROXY_SLOTS = 3
+HEALTH_CHECK_URL = "https://spy.dropshiptools.xyz/api/health"
 
 RETRY_INTERVAL = 10
 
@@ -59,6 +63,7 @@ class MetaCollectorService:
         *,
         proxy_scrape: ProxyScrapeService | None = None,
         fallback_proxies: list[str] | None = None,
+        proxy_log_repo: ProxyLogRepository | None = None,
     ) -> None:
         self._proxy_pool = proxy_pool
         self._proxy_scrape = proxy_scrape
@@ -68,6 +73,9 @@ class MetaCollectorService:
             proxy_rotation_service = ProxyRotationService()
 
         self._proxy_rotation_service = proxy_rotation_service
+        self._proxy_log_repo = proxy_log_repo or ProxyLogRepository(
+            proxy_logs_sync_collection(self._settings)
+        )
 
     def get_proxy(
         self,
@@ -90,16 +98,48 @@ class MetaCollectorService:
                 )
 
                 if acquired:
-                    response = requests.get(
-                        "https://spy.dropshiptools.xyz/api/health",
-                        proxies={
-                            "https": proxy,
-                        },
-                        timeout=30,
-                    )
-                    if response.status_code != 200:
+                    started = time.monotonic()
+                    try:
+                        response = requests.get(
+                            HEALTH_CHECK_URL,
+                            proxies={
+                                "https": proxy,
+                            },
+                            timeout=30,
+                        )
+                        duration_ms = int((time.monotonic() - started) * 1000)
+                        error = None
+                        if response.status_code < 200 or response.status_code >= 300:
+                            error = {
+                                "message": f"Health check returned {response.status_code}",
+                                "type": "HTTPError",
+                                "statusCode": response.status_code,
+                            }
+                        self._log_proxy_request(
+                            proxy=proxy,
+                            url=HEALTH_CHECK_URL,
+                            method="GET",
+                            status_code=response.status_code,
+                            duration_ms=duration_ms,
+                            error=error,
+                        )
+                        if response.status_code != 200:
+                            continue
+                        return proxy, lock_key
+                    except Exception as exc:
+                        duration_ms = int((time.monotonic() - started) * 1000)
+                        self._log_proxy_request(
+                            proxy=proxy,
+                            url=HEALTH_CHECK_URL,
+                            method="GET",
+                            status_code=None,
+                            duration_ms=duration_ms,
+                            error={
+                                "message": str(exc),
+                                "type": type(exc).__name__,
+                            },
+                        )
                         continue
-                    return proxy, lock_key
 
             # Try 3 empty proxy slots
             for slot in range(EMPTY_PROXY_SLOTS):
@@ -140,6 +180,39 @@ class MetaCollectorService:
             token,
         )
 
+    def _log_proxy_request(
+        self,
+        *,
+        proxy: str,
+        url: str,
+        method: str | None,
+        status_code: int | None,
+        duration_ms: int | None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            status = ProxyLogStatus.SUCCESS
+            if (
+                error is not None
+                or status_code is None
+                or status_code < 200
+                or status_code >= 300
+            ):
+                status = ProxyLogStatus.FAILED
+            self._proxy_log_repo.insert_one(
+                ProxyLogModel(
+                    proxy=proxy,
+                    status=status,
+                    url=url,
+                    method=method,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    error=error,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to write proxy log")
+
     def search(
         self,
         *,
@@ -153,8 +226,8 @@ class MetaCollectorService:
         on_ad: OnAdCallback | None = None,
     ) -> int:
         filter_config = FilterConfig(
-            start_date=datetime.combine(start_date, time.min),
-            end_date=datetime.combine(end_date, time.max),
+            start_date=datetime.combine(start_date, dt_time.min),
+            end_date=datetime.combine(end_date, dt_time.max),
             media_type=media_type,
         )
         logger.info(
@@ -307,6 +380,23 @@ class MetaCollectorService:
             futures.append(_executor.submit(on_ad, ad, link_ads_url, rank))
             count += 1
 
+        def handle_request_log(
+            *,
+            url: str,
+            method: str | None,
+            status_code: int | None,
+            duration_ms: int | None,
+            error: dict[str, Any] | None,
+        ) -> None:
+            self._log_proxy_request(
+                proxy=proxy or "",
+                url=url,
+                method=method,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                error=error,
+            )
+
         try:
             crawler = MetaAdsCrawler()
             ads = crawler.search(
@@ -318,6 +408,7 @@ class MetaCollectorService:
                 end_date=end_date,
                 proxy=proxy,
                 on_ad=handle_captured_ad if on_ad is not None else None,
+                on_request_log=handle_request_log,
                 stop_check=(
                     (lambda: self._raise_if_failed(futures))
                     if on_ad is not None

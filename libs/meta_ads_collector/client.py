@@ -41,6 +41,19 @@ from .proxy_pool import ProxyPool
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_proxy(proxy_url: Optional[str]) -> Optional[str]:
+    if not proxy_url:
+        return None
+    if "@" in proxy_url:
+        parts = proxy_url.split("@")
+        scheme = ""
+        if "://" in parts[0]:
+            scheme = parts[0].split("://")[0] + "://"
+        return f"{scheme}{parts[-1]}"
+    return proxy_url
+
+
+
 class MetaAdsClient:
     """
     HTTP client for Meta Ad Library.
@@ -768,6 +781,10 @@ class MetaAdsClient:
                     proxy_url
                 )
 
+            current_proxy = proxy_url or (self._proxy_string) or (self.session.proxies.get("https") if self.session.proxies else None)
+            if current_proxy:
+                logger.info(f"Meta API request: {method} {url} using proxy {_sanitize_proxy(current_proxy)}")
+
             try:
                 response = self.session.request(
                     method=method,  # type: ignore[arg-type]
@@ -784,13 +801,19 @@ class MetaAdsClient:
                     if self._proxy_pool and proxy_url:
                         self._proxy_pool.mark_failure(proxy_url)
                     wait_time = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning(f"Rate limited. Waiting {wait_time:.2f}s before retry...")
+                    if current_proxy:
+                        logger.warning(f"Rate limited (429) on proxy {_sanitize_proxy(current_proxy)}. Waiting {wait_time:.2f}s before retry...")
+                    else:
+                        logger.warning(f"Rate limited. Waiting {wait_time:.2f}s before retry...")
                     time.sleep(wait_time)
                     continue
 
                 # Mark proxy as successful
                 if self._proxy_pool and proxy_url:
                     self._proxy_pool.mark_success(proxy_url)
+
+                if current_proxy:
+                    logger.info(f"Meta API request success: {method} {url} using proxy {_sanitize_proxy(current_proxy)} - Status: {response.status_code}")
 
                 return response
 
@@ -800,7 +823,10 @@ class MetaAdsClient:
                 if self._proxy_pool and proxy_url:
                     self._proxy_pool.mark_failure(proxy_url)
                 wait_time = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
-                logger.warning(f"Request failed (attempt {attempt + 1}/{self.max_retries}): {e}")
+                if current_proxy:
+                    logger.warning(f"Request failed on proxy {_sanitize_proxy(current_proxy)} (attempt {attempt + 1}/{self.max_retries}): {e}")
+                else:
+                    logger.warning(f"Request failed (attempt {attempt + 1}/{self.max_retries}): {e}")
 
                 if attempt < self.max_retries - 1:
                     time.sleep(wait_time)
