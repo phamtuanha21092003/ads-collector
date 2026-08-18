@@ -24,7 +24,6 @@ def connect(settings: Settings) -> Redis:
         )
 
         _redis_client.ping()
-        print("CONNECT:", id(_redis_client), _redis_client)
 
     return _redis_client
 
