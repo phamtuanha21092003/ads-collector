@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import date, datetime, time
 from typing import Any
 from concurrent.futures import Future, ThreadPoolExecutor
+import os
 
 from loguru import logger
 from app.config import get_settings
@@ -71,11 +72,12 @@ class MetaCollectorService:
     def get_proxy(
         self,
         proxies: list[str],
-    ) -> tuple[str, str, str]:
+        token: str
+    ) -> tuple[str, str]:
         redis_client = get_redis()
 
         while True:
-            token = str(uuid.uuid4())
+            token = os.getenv("pm_id", "")
 
             for proxy in proxies:
                 lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
@@ -84,10 +86,11 @@ class MetaCollectorService:
                     lock_key,
                     token,
                     nx=True,
+                    ex=10*60
                 )
 
                 if acquired:
-                    return proxy, lock_key, token
+                    return proxy, lock_key
 
             # Try 3 empty proxy slots
             for slot in range(EMPTY_PROXY_SLOTS):
@@ -97,10 +100,11 @@ class MetaCollectorService:
                     lock_key,
                     token,
                     nx=True,
+                    ex=10*60
                 )
 
                 if acquired:
-                    return "", lock_key, token
+                    return "", lock_key
 
             # Everything is busy
             time.sleep(RETRY_INTERVAL)
@@ -274,7 +278,8 @@ class MetaCollectorService:
         proxies: list[str] = []
         if self._proxy_rotation_service:
             proxies = self._proxy_rotation_service._proxies
-        proxy, lock_key, token = self.get_proxy(proxies)
+        token = os.getenv("pm_id", "")
+        proxy, lock_key= self.get_proxy(proxies, token)
 
         count = 0
         futures: list[Future[None]] = []
