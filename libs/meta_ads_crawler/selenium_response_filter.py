@@ -14,9 +14,66 @@ from selenium.common.exceptions import WebDriverException
 from libs.meta_ads_collector.exceptions import RateLimitError
 from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import extract_ads_from_scripts, getAds
+import random
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
+CHROME_VERSIONS: list[tuple[str, str]] = [
+    ("140", "140.0.7200.110"),
+    ("141", "141.0.7300.120"),
+    ("142", "142.0.7400.100"),
+    ("143", "143.0.7499.169"),
+    ("144", "144.0.7559.109"),
+    ("145", "145.0.7632.110"),
+]
+PLATFORMS: list[dict[str, str]] = [
+    {
+        "name": "windows",
+        "ua_os": "Windows NT 10.0; Win64; x64",
+        "sec_ch_ua_platform": '"Windows"',
+        "platform_version": '"15.0.0"',
+    },
+    {
+        "name": "macos",
+        "ua_os": "Macintosh; Intel Mac OS X 10_15_7",
+        "sec_ch_ua_platform": '"macOS"',
+        "platform_version": '"14.5.0"',
+    },
+    {
+        "name": "macos",
+        "ua_os": "Macintosh; Intel Mac OS X 10_15_7",
+        "sec_ch_ua_platform": '"macOS"',
+        "platform_version": '"13.6.0"',
+    },
+    {
+        "name": "windows",
+        "ua_os": "Windows NT 10.0; Win64; x64",
+        "sec_ch_ua_platform": '"Windows"',
+        "platform_version": '"10.0.0"',
+    },
+]
+VIEWPORTS: list[tuple[int, int]] = [
+    (1366, 768),
+    (1440, 900),
+    (1536, 864),
+    (1920, 1080),
+    (2560, 1440),
+    (1680, 1050),
+    (1280, 720),
+    (1600, 900),
+]
+
+DPR_VALUES: list[float] = [1, 1.25, 1.5, 2, 3]
+
+# ---------------------------------------------------------------------------
+# "Not A Brand" hint variations
+# ---------------------------------------------------------------------------
+NOT_A_BRAND_HINTS: list[tuple[str, str]] = [
+    ("Not_A Brand", "24"),
+    ("Not/A)Brand", "8"),
+    ("Not.A/Brand", "8"),
+    ("Not A(Brand", "99"),
+]
 
 
 def create_driver(
@@ -24,15 +81,29 @@ def create_driver(
     proxy: str | None = None,
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
-    if proxy:
-        options.add_argument(f"--proxy-server={proxy}")
+    # if proxy:
+    #     options.add_argument(f"--proxy-server={proxy}")
     if headless:
         print("Running Chrome in headless mode.")
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/151.0.0.0 Safari/537.36"
+    chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
+
+    # Pick random platform
+    platform = random.choice(PLATFORMS)
+
+    # Pick viewport and DPR
+    viewport_width, viewport_height = random.choice(VIEWPORTS)
+    dpr = random.choice(DPR_VALUES)
+
+    # Pick a "Not a Brand" variant
+    nab_name, nab_version = random.choice(NOT_A_BRAND_HINTS)
+
+    # Build User-Agent
+    user_agent = (
+        f"Mozilla/5.0 ({platform['ua_os']}) AppleWebKit/537.36 "
+        f"(KHTML, like Gecko) Chrome/{chrome_major}.0.0.0 Safari/537.36"
     )
+
+    options.add_argument(f"--user-agent={user_agent}")
     options.add_argument("--headless=false")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
