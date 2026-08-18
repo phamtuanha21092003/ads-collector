@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import random
+import uuid
 from collections.abc import Callable
 from datetime import date, datetime, time
 from typing import Any
 from concurrent.futures import Future, ThreadPoolExecutor
+import asyncio
 
 from loguru import logger
+from app.config import get_settings
+from app.repository.system_config_repo import SystemConfigRepository
 from libs.meta_ads_collector import (
     FilterConfig,
     MetaAdsCollector,
@@ -22,10 +26,19 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from app.redis import _redis_client
 
 from app.service.proxy_scrape import ProxyScrapeService
+from app.service.proxy_rotation import ProxyRotationService
+from app.db import close_client, system_configs_collection
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
+
+PROXY_LOCK_PREFIX = "proxy:lock:"
+EMPTY_PROXY_LOCK_PREFIX = "proxy:lock:empty:"
+EMPTY_PROXY_SLOTS = 3
+
+RETRY_INTERVAL = 10
 
 META_PAGE_SIZE = 30
 
@@ -38,9 +51,10 @@ class ReachThresholdReached(Exception):
 
 
 class MetaCollectorService:
-    def __init__(
+    async def __init__(
         self,
         proxy_pool: ProxyPool | None = None,
+        proxy_rotation_service: ProxyRotationService | None =None,
         *,
         proxy_scrape: ProxyScrapeService | None = None,
         fallback_proxies: list[str] | None = None,
@@ -48,6 +62,72 @@ class MetaCollectorService:
         self._proxy_pool = proxy_pool
         self._proxy_scrape = proxy_scrape
         self._fallback_proxies = list(fallback_proxies or [])
+        self._settings = get_settings()
+        if not proxy_rotation_service:
+            proxy_rotation_service = ProxyRotationService()
+
+        self._proxy_rotation_service = proxy_rotation_service
+
+
+    async def get_proxy(self, proxies: list[str],) -> tuple[str, str, str]:
+        if _redis_client is None:
+            raise RuntimeError("Redis is not connected")
+
+        while True:
+            token = str(uuid.uuid4())
+
+            for proxy in proxies:
+                lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
+
+                acquired = await _redis_client.set(
+                    lock_key,
+                    token,
+                    nx=True,
+                )
+
+                if acquired:
+                    return proxy, lock_key, token
+
+            # Try 3 empty proxy slots
+            for slot in range(EMPTY_PROXY_SLOTS):
+                lock_key = f"{EMPTY_PROXY_LOCK_PREFIX}{slot}"
+
+                acquired = await _redis_client.set(
+                    lock_key,
+                    token,
+                    nx=True,
+                )
+
+                if acquired:
+                    return "", lock_key, token
+
+            # Everything is busy
+            await asyncio.sleep(RETRY_INTERVAL)
+
+
+    async def release_proxy(
+        self,
+        lock_key: str,
+        token: str,
+    ) -> None:
+        if _redis_client is None:
+            raise RuntimeError("Redis is not connected")
+
+        lua_script = """
+        if redis.call("GET", KEYS[1]) == ARGV[1] then
+            return redis.call("DEL", KEYS[1])
+        end
+
+        return 0
+        """
+
+        await _redis_client.eval(
+            lua_script,
+            1,
+            lock_key,
+            token,
+        )
+
 
     def search(
         self,
@@ -181,7 +261,7 @@ class MetaCollectorService:
             )
         ),
     )
-    def _search_with_retry(
+    async def _search_with_retry(
         self,
         *,
         keyword: str,
@@ -193,7 +273,15 @@ class MetaCollectorService:
         start_date: str | None,
         end_date: str | None,
     ) -> int:
-        active_proxy = self._random_proxy_for_search()
+        await self._proxy_rotation_service.load_from_mongo(
+            SystemConfigRepository(system_configs_collection(self._settings))
+        )
+        proxies: list[str] = []
+        if self._proxy_rotation_service:
+            proxies = self._proxy_rotation_service._proxies
+        proxy, lock_key, token = await self.get_proxy(proxies)
+
+
         count = 0
         futures: list[Future[None]] = []
 
@@ -220,7 +308,7 @@ class MetaCollectorService:
                 max_results=max_results,
                 start_date=start_date,
                 end_date=end_date,
-                proxy=active_proxy,
+                proxy=proxy,
                 on_ad=handle_captured_ad if on_ad is not None else None,
                 stop_check=(
                     (lambda: self._raise_if_failed(futures))
@@ -248,5 +336,11 @@ class MetaCollectorService:
             except BaseException:
                 pass
             raise
+        finally:
+            await self.release_proxy(
+                lock_key=lock_key,
+                token=token,
+            )
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count
+

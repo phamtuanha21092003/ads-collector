@@ -41,6 +41,7 @@ def parse_proxy_list(raw: str) -> list[str]:
 class ProxyRotationService:
     def __init__(self) -> None:
         self._pool: ProxyPool | None = None
+        self._proxies: list[str] = []
 
     @property
     def pool(self) -> ProxyPool | None:
@@ -64,6 +65,8 @@ class ProxyRotationService:
                 PROXIES_ROTATION_META_KEY,
             )
             return
+
+        self._proxies = proxies
 
         try:
             self._pool = ProxyPool(proxies)

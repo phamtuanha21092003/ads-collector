@@ -15,6 +15,7 @@ from app.service.meta_collector import MetaCollectorService
 from app.service.proxy_rotation import ProxyRotationService
 from app.service.proxy_scrape import ProxyScrapeService
 from app.worker.loop import WorkerLoop
+from app.redis import connect as init_connection_redis
 
 
 def _configure_logging() -> None:
@@ -37,6 +38,10 @@ async def _async_main() -> None:
         raise SystemExit("DB_URI is required")
     if not settings.rabbitmq_uri:
         raise SystemExit("RABBITMQ_URI is required")
+    if not settings.redis_uri:
+        raise SystemExit("REDIS_URI is required")
+
+    init_connection_redis(settings=settings)
 
     proxy_rotation = ProxyRotationService()
     await proxy_rotation.load_from_mongo(
@@ -58,6 +63,7 @@ async def _async_main() -> None:
     meta = MetaCollectorService(
         proxy_pool=proxy_rotation.pool,
         proxy_scrape=proxy_scrape,
+        proxy_rotation_service=proxy_rotation
     )
     analyzer = AIClient(settings)
     worker = WorkerLoop(settings, meta=meta, analyzer=analyzer)

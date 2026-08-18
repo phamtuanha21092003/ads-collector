@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     db_uri: str = ""
     db_name: str = "ads_collector"
+    redis_uri: str = ""
     rabbitmq_uri: str = ""
     rabbitmq_queue: str = "ads_collector.jobs"
     rabbitmq_prefetch: int = 1

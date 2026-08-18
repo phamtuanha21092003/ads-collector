@@ -136,7 +136,7 @@ class MetaAdsCrawler:
         capture_duration_seconds: float | None = 180,
         auto_scroll: bool = True,
         scroll_interval_seconds: float = 3.0,
-        proxy: str | ProxyPool | None = None,
+        proxy: str = None,
     ) -> list[dict[str, Any]]:
         """Capture Meta Ad Library responses and return normalized advertisements.
 
@@ -253,14 +253,12 @@ def capture_responses(
     headless: bool,
     auto_scroll: bool,
     scroll_interval_seconds: float,
-    proxy: str | ProxyPool | None = None,
+    proxy: str = None,
     on_ad: OnAdCallback | None = None,
     stop_check: Callable[[], None] | None = None,
 ) -> list[str | dict[str, Any]]:
     """Capture network responses that match the supplied filters."""
     url_filter = "/api/graphql/"
-    proxy_pool = proxy if isinstance(proxy, ProxyPool) else None
-    active_proxy = proxy_pool.get_next() if proxy_pool else proxy
 
     active_driver: webdriver.Chrome | None = None
 
@@ -378,7 +376,7 @@ def capture_responses(
         emit_ads(body_text)
 
     try:
-        active_driver = create_driver(proxy=active_proxy, headless=headless)
+        active_driver = create_driver(proxy=proxy, headless=headless)
         active_driver.execute_cdp_cmd(
             "Network.enable",
             {
@@ -491,13 +489,9 @@ def capture_responses(
             time.sleep(0.1)
 
         print(f"capture {len(captured_response_bodies)} response.")
-        if proxy_pool and active_proxy:
-            proxy_pool.mark_success(active_proxy)
         return captured_response_bodies
 
     except Exception:
-        if proxy_pool and active_proxy and not (callback_raised or stop_check_raised):
-            proxy_pool.mark_failure(active_proxy)
         raise
 
     finally:
