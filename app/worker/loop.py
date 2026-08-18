@@ -396,6 +396,14 @@ class WorkerLoop:
                     job_id=existing.id,
                     parent_job_id=parent.id,
                 )
+                await self._product_repo.sink_ads(
+                    shop=domain,
+                    job_ids=[
+                        existing.id,
+                        self._parent_job_id(existing.metadata),
+                        rootId,
+                    ],
+                )
                 logger.info(
                     "Reuse domain job {} keyword={!r} qualifiedAdsCount={} "
                     "→ parent {} (+{})",

@@ -81,4 +81,19 @@ class ProductRepository:
                 }
             },
         )
-    
+
+    async def sink_ads(
+        self,
+        *,
+        shop: str,
+        job_ids: list[ObjectId],
+    ) -> None:
+        _job_ids = [job_id for job_id in job_ids if job_id is not None]
+        await self._collection.update_many(
+            {"shop": shop},
+            {
+                "$addToSet": {
+                    "jobIds": {"$each": _job_ids},
+                },
+            },
+        )

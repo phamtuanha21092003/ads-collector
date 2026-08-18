@@ -51,10 +51,10 @@ class ReachThresholdReached(Exception):
 
 
 class MetaCollectorService:
-    async def __init__(
+    def __init__(
         self,
         proxy_pool: ProxyPool | None = None,
-        proxy_rotation_service: ProxyRotationService | None =None,
+        proxy_rotation_service: ProxyRotationService | None = None,
         *,
         proxy_scrape: ProxyScrapeService | None = None,
         fallback_proxies: list[str] | None = None,
@@ -68,8 +68,10 @@ class MetaCollectorService:
 
         self._proxy_rotation_service = proxy_rotation_service
 
-
-    async def get_proxy(self, proxies: list[str],) -> tuple[str, str, str]:
+    async def get_proxy(
+        self,
+        proxies: list[str],
+    ) -> tuple[str, str, str]:
         if _redis_client is None:
             raise RuntimeError("Redis is not connected")
 
@@ -104,7 +106,6 @@ class MetaCollectorService:
             # Everything is busy
             await asyncio.sleep(RETRY_INTERVAL)
 
-
     async def release_proxy(
         self,
         lock_key: str,
@@ -127,7 +128,6 @@ class MetaCollectorService:
             lock_key,
             token,
         )
-
 
     def search(
         self,
@@ -281,7 +281,6 @@ class MetaCollectorService:
             proxies = self._proxy_rotation_service._proxies
         proxy, lock_key, token = await self.get_proxy(proxies)
 
-
         count = 0
         futures: list[Future[None]] = []
 
@@ -343,4 +342,3 @@ class MetaCollectorService:
             )
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count
-
