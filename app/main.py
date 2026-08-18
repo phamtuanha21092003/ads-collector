@@ -41,7 +41,7 @@ async def _async_main() -> None:
     if not settings.redis_uri:
         raise SystemExit("REDIS_URI is required")
 
-    await init_connection_redis(settings=settings)
+    init_connection_redis(settings=settings)
 
     proxy_rotation = ProxyRotationService()
     await proxy_rotation.load_from_mongo(

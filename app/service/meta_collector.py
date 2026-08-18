@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import random
 import uuid
+import time
 from collections.abc import Callable
 from datetime import date, datetime, time
 from typing import Any
 from concurrent.futures import Future, ThreadPoolExecutor
-import asyncio
 
 from loguru import logger
 from app.config import get_settings
@@ -68,7 +68,7 @@ class MetaCollectorService:
 
         self._proxy_rotation_service = proxy_rotation_service
 
-    async def get_proxy(
+    def get_proxy(
         self,
         proxies: list[str],
     ) -> tuple[str, str, str]:
@@ -81,7 +81,7 @@ class MetaCollectorService:
             for proxy in proxies:
                 lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
 
-                acquired = await _redis_client.set(
+                acquired = _redis_client.set(
                     lock_key,
                     token,
                     nx=True,
@@ -94,7 +94,7 @@ class MetaCollectorService:
             for slot in range(EMPTY_PROXY_SLOTS):
                 lock_key = f"{EMPTY_PROXY_LOCK_PREFIX}{slot}"
 
-                acquired = await _redis_client.set(
+                acquired = _redis_client.set(
                     lock_key,
                     token,
                     nx=True,
@@ -104,9 +104,9 @@ class MetaCollectorService:
                     return "", lock_key, token
 
             # Everything is busy
-            await asyncio.sleep(RETRY_INTERVAL)
+            time.sleep(RETRY_INTERVAL)
 
-    async def release_proxy(
+    def release_proxy(
         self,
         lock_key: str,
         token: str,
@@ -122,7 +122,7 @@ class MetaCollectorService:
         return 0
         """
 
-        await _redis_client.eval(
+        _redis_client.eval(
             lua_script,
             1,
             lock_key,
@@ -261,7 +261,7 @@ class MetaCollectorService:
             )
         ),
     )
-    async def _search_with_retry(
+    def _search_with_retry(
         self,
         *,
         keyword: str,
@@ -273,13 +273,10 @@ class MetaCollectorService:
         start_date: str | None,
         end_date: str | None,
     ) -> int:
-        await self._proxy_rotation_service.load_from_mongo(
-            SystemConfigRepository(system_configs_collection(self._settings))
-        )
         proxies: list[str] = []
         if self._proxy_rotation_service:
             proxies = self._proxy_rotation_service._proxies
-        proxy, lock_key, token = await self.get_proxy(proxies)
+        proxy, lock_key, token = self.get_proxy(proxies)
 
         count = 0
         futures: list[Future[None]] = []
@@ -336,7 +333,7 @@ class MetaCollectorService:
                 pass
             raise
         finally:
-            await self.release_proxy(
+            self.release_proxy(
                 lock_key=lock_key,
                 token=token,
             )

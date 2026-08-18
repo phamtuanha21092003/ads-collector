@@ -2,8 +2,8 @@
 
 from typing import Optional
 
-import redis.asyncio as redis
-from redis.asyncio import Redis
+import redis
+from redis import Redis
 
 from app.config import Settings
 
@@ -11,7 +11,7 @@ from app.config import Settings
 _redis_client: Optional[Redis] = None
 
 
-async def connect(settings: Settings) -> Redis:
+def connect(settings: Settings) -> Redis:
     global _redis_client
 
     if _redis_client is None:
@@ -23,6 +23,7 @@ async def connect(settings: Settings) -> Redis:
             decode_responses=True,
         )
 
-        await _redis_client.ping()
+        _redis_client.ping()
+        print("CONNECT:", id(_redis_client), _redis_client)
 
     return _redis_client
