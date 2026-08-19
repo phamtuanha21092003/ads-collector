@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_api_base: str = ""
     openai_model: str = ""
+    proxy_manager: str = ""
 
 
 @lru_cache

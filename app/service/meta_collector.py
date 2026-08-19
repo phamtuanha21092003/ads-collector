@@ -77,11 +77,7 @@ class MetaCollectorService:
             proxy_logs_sync_collection(self._settings)
         )
 
-    def get_proxy(
-        self,
-        proxies: list[str],
-        token: str
-    ) -> tuple[str, str]:
+    def get_proxy(self, proxies: list[str], token: str) -> tuple[str, str]:
         redis_client = get_redis()
 
         while True:
@@ -90,12 +86,7 @@ class MetaCollectorService:
             for proxy in proxies:
                 lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
 
-                acquired = redis_client.set(
-                    lock_key,
-                    token,
-                    nx=True,
-                    ex=60*60
-                )
+                acquired = redis_client.set(lock_key, token, nx=True, ex=60 * 60)
 
                 if acquired:
                     started = time.monotonic()
@@ -145,12 +136,7 @@ class MetaCollectorService:
             for slot in range(EMPTY_PROXY_SLOTS):
                 lock_key = f"{EMPTY_PROXY_LOCK_PREFIX}{slot}"
 
-                acquired = redis_client.set(
-                    lock_key,
-                    token,
-                    nx=True,
-                    ex=60*60
-                )
+                acquired = redis_client.set(lock_key, token, nx=True, ex=60 * 60)
 
                 if acquired:
                     return "", lock_key
@@ -357,12 +343,6 @@ class MetaCollectorService:
         start_date: str | None,
         end_date: str | None,
     ) -> int:
-        proxies: list[str] = []
-        if not self._proxy_rotation_service is None:
-            proxies = self._proxy_rotation_service._proxies
-        token = os.getenv("pm_id", "")
-        proxy, lock_key= self.get_proxy(proxies, token)
-
         count = 0
         futures: list[Future[None]] = []
 
@@ -406,15 +386,9 @@ class MetaCollectorService:
                 max_results=max_results,
                 start_date=start_date,
                 end_date=end_date,
-                proxy=proxy,
+                proxy=self._settings.proxy_manager,
                 on_ad=handle_captured_ad if on_ad is not None else None,
                 on_request_log=handle_request_log,
-                stop_check=(
-                    (lambda: self._raise_if_failed(futures))
-                    if on_ad is not None
-                    else None
-                ),
-                scroll_interval_seconds=6,
             )
             if on_ad is None:
                 count = len(ads)
@@ -435,10 +409,5 @@ class MetaCollectorService:
             except BaseException:
                 pass
             raise
-        finally:
-            self.release_proxy(
-                lock_key=lock_key,
-                token=token,
-            )
         logger.info("Collected {} ads for keyword={!r}", count, keyword)
         return count

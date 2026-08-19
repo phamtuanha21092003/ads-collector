@@ -2,24 +2,19 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
-
+from dataclasses import dataclass
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from app.util.format_url_util import canonical_product_url
 
 
-def build_url(keyword: str, country: str) -> str:
-    params = {
-        "active_status": "all",
-        "ad_type": "all",
-        "country": country.upper(),
-        "q": keyword,
-        "search_type": "keyword_unordered",
-        "media_type": "all",
-    }
-    return "https://www.facebook.com/ads/library/?" + urlencode(params)
+@dataclass(slots=True)
+class AdsResponse:
+    ads: list[dict]
+    cursor: str
+    has_next_page: bool
+    total: int | None
 
 
 def find_values_by_key(value: Any, target_key: str) -> list[Any]:
@@ -157,9 +152,8 @@ def read_script_contents(driver: webdriver.Chrome) -> list[str]:
         """) or []
 
 
-def extract_ads_from_scripts(script_contents: list[str]) -> list[dict[str, Any]]:
+def extract_reponse_from_scripts(script_contents: list[str]) -> AdsResponse:
     ads_by_id: dict[str, dict[str, Any]] = {}
-    parsed_count = 0
 
     for content in script_contents:
         try:
@@ -169,7 +163,8 @@ def extract_ads_from_scripts(script_contents: list[str]) -> list[dict[str, Any]]
             continue
 
         collated_groups = find_values_by_key(payload, "collated_results")
-
+        page_info = find_values_by_key(payload, "page_info")[0]
+        ads_count = find_values_by_key(payload, "count")[0]
         for group in collated_groups:
             if not isinstance(group, list):
                 continue
@@ -180,10 +175,15 @@ def extract_ads_from_scripts(script_contents: list[str]) -> list[dict[str, Any]]
                 if ad_id:
                     ads_by_id[str(ad_id)] = normalize_ad(raw_ad)
 
-    return list(ads_by_id.values())
+    return AdsResponse(
+        ads=list(ads_by_id.values()),
+        cursor=str(page_info["end_cursor"]),
+        has_next_page=bool(page_info["has_next_page"]),
+        total=ads_count,
+    )
 
 
-def getAds(driver):
+def getAds(driver: webdriver.Chrome) -> AdsResponse:
     try:
         wait_for_embedded_ads(driver, 30)
     except TimeoutException:
@@ -191,9 +191,7 @@ def getAds(driver):
             "Không tìm thấy JSON quảng cáo. Trang có thể yêu cầu cookie, "
             "CAPTCHA/checkpoint, không có kết quả hoặc cấu trúc đã thay đổi."
         )
-
     # Đợi ngắn để các payload defer còn lại được đưa vào DOM.
     time.sleep(2)
     script_contents = read_script_contents(driver)
-    ads = extract_ads_from_scripts(script_contents)
-    return ads
+    return extract_reponse_from_scripts(script_contents)
