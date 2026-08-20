@@ -213,6 +213,7 @@ class MetaAdsCrawler:
             end_date=end_date,
             proxy=proxy,
             on_ad=on_ad,
+            on_request_log=on_request_log
         )
 
         ads_by_id: dict[str, dict[str, Any]] = {}
@@ -273,6 +274,7 @@ class MetaAdsCrawler:
         end_date: str | None,
         proxy: str = None,
         on_ad: OnAdCallback | None = None,
+        on_request_log: OnRequestLogCallback | None = None,
     ) -> list[str | dict[str, Any]]:
         """Capture network responses that match the supplied filters."""
 
@@ -335,6 +337,7 @@ class MetaAdsCrawler:
                     start_date=start_date,
                     end_date=end_date,
                     sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
+                    on_request_log=on_request_log
                 )
                 if response and hasattr(response, "ads"):
                     ads.extend(response.ads)

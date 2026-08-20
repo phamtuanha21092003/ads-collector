@@ -17,6 +17,8 @@ from urllib.parse import quote
 from curl_cffi.requests import Session as CffiSession
 from curl_cffi.requests.exceptions import RequestException as CffiRequestException
 
+from app.model.proxy_log_model import ProxyLogStatus
+
 from .constants import (
     CHROME_FULL_VERSION,
     CHROME_VERSION,
@@ -36,8 +38,11 @@ from .exceptions import (
     SessionExpiredError,
 )
 from .fingerprint import BrowserFingerprint, generate_fingerprint
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+OnRequestLogCallback = Callable[..., None]
 
 
 def _sanitize_proxy(proxy_url: Optional[str]) -> Optional[str]:
@@ -599,9 +604,11 @@ class MetaAdsClient:
         params: Optional[dict] = None,
         data: Optional[dict] = None,
         headers: Optional[dict] = None,
+        on_request_log: OnRequestLogCallback | None = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> tuple[Any, str]:
         """Make an HTTP request with retry logic and proxy rotation."""
+        request_id = ""
         merged_headers = dict(self.session.headers)
         if headers:
             merged_headers.update(headers)
@@ -652,6 +659,10 @@ class MetaAdsClient:
                         "http": add_proxy_auth(self.session.proxies["http"]),
                         "https": add_proxy_auth(self.session.proxies["https"]),
                     }
+                if request_id and not on_request_log is None:
+                    on_request_log(request_id=request_id, headers=merged_headers)
+                    
+                
                 response = cffi_requests.request(
                     method=method,
                     url=full_url,
@@ -682,7 +693,7 @@ class MetaAdsClient:
                         f"Meta API request success: {method} {url} using proxy {_sanitize_proxy(current_proxy)} - Status: {response.status_code}"
                     )
 
-                return response
+                return response, request_id
 
             except CffiRequestException as e:
                 last_exception = e
@@ -706,52 +717,23 @@ class MetaAdsClient:
         self,
         payload: dict[str, str],
         headers: dict[str, str],
-    ) -> Any:
+        on_request_log: OnRequestLogCallback | None = None,
+    ) -> tuple[Any, str]:
         """
         Make a GraphQL request with automatic session refresh on auth failures.
 
         If a 403 is received (expired cookies/tokens), refreshes the session
         and rebuilds the payload with new tokens, then retries once.
         """
-        response = self._make_request(
-            "POST", self.GRAPHQL_URL, data=payload, headers=headers
+        response, request_id = self._make_request(
+            "POST", self.GRAPHQL_URL, data=payload, headers=headers, on_request_log=on_request_log
         )
 
         if response.status_code == 403:
             logger.warning(
                 "Got 403 on GraphQL request - session likely expired, refreshing..."
             )
-            if self._refresh_session():
-                # Rebuild payload with new tokens (lsd, jazoest, etc. changed)
-                # Update the lsd-dependent fields
-                lsd = self._tokens.get("lsd", "")
-                payload["lsd"] = lsd
-                payload["jazoest"] = self._calculate_jazoest(lsd)
-                payload["__rev"] = self._tokens.get("__rev", FALLBACK_REV)
-                payload["__spin_r"] = self._tokens.get("__spin_r", FALLBACK_REV)
-                payload["__spin_t"] = self._tokens.get(
-                    "__spin_t", str(int(time.time()))
-                )
-                payload["__spin_b"] = self._tokens.get("__spin_b", "trunk")
-                payload["__hsi"] = self._tokens.get(
-                    "__hsi", str(int(time.time() * 1000))
-                )
-                # __dyn/__csr/fb_dtsg only when genuinely extracted -- never
-                # send stale fallbacks (they trigger error 1675004)
-                for tok in ("__dyn", "__csr", "fb_dtsg", "__hsdp", "__hblp"):
-                    if tok in self._tokens:
-                        payload[tok] = self._tokens[tok]
-                    else:
-                        payload.pop(tok, None)
-
-                headers["x-fb-lsd"] = lsd
-                response = self._make_request(
-                    "POST", self.GRAPHQL_URL, data=payload, headers=headers
-                )
-            else:
-                logger.error("Session refresh failed, returning 403 response")
-
-        return response
+        return response, request_id
 
     # Fallback values are imported from constants module
 
@@ -862,6 +844,7 @@ class MetaAdsClient:
         collation_token: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        on_request_log: OnRequestLogCallback | None = None,
     ) -> tuple[dict[str, Any], Optional[str]]:
         """
         Search for ads in the Meta Ad Library.
@@ -950,9 +933,10 @@ class MetaAdsClient:
         )
 
         # Make request with session refresh on auth failure
-        response = self._make_graphql_request(payload, headers)
+        response, request_id = self._make_graphql_request(payload, headers, on_request_log=on_request_log)
 
         if response.status_code != 200:
+            on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value)
             logger.error(f"GraphQL request failed: {response.status_code}")
             logger.debug(f"Response: {response.text[:500]}")
             raise MetaAdsError(
@@ -972,6 +956,9 @@ class MetaAdsClient:
             logger.debug(
                 f"Response keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}"
             )
+            
+            if not on_request_log is None:
+                on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.SUCCESS.value)
 
             # Check for errors
             if "errors" in data:
@@ -984,6 +971,8 @@ class MetaAdsClient:
                         logger.warning(
                             f"Rate limited: {error_msg}. Waiting before retry..."
                         )
+                        if not on_request_log is None:
+                            on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value, err={"err": "Rate limit", "message": error_msg, "code": error_code})
                         self._consecutive_errors += 1
                         time.sleep(5 + random.uniform(0, 3))
                         return {
@@ -992,6 +981,9 @@ class MetaAdsClient:
                             "rate_limited": True,
                             "error": error_msg,
                         }, None
+
+                    if not on_request_log is None:
+                        on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value, err={"message": error_msg, "code": error_code})
 
                     # Session/auth errors - trigger refresh
                     if (
@@ -1003,7 +995,7 @@ class MetaAdsClient:
                         )
                         self._consecutive_errors += 1
                         if self._consecutive_errors >= 2:
-                            self._refresh_session()
+                            pass
                         return {
                             "ads": [],
                             "page_info": {},
@@ -1087,88 +1079,6 @@ class MetaAdsClient:
         except Exception as e:
             logger.error(f"Failed to parse search response: {e}")
             return {"ads": [], "page_info": {}, "raw": data, "error": str(e)}, None
-
-    def search_pages(
-        self,
-        query: str,
-        country: str = "US",
-    ) -> list[dict[str, Any]]:
-        """Search for pages in the Ad Library using the typeahead endpoint.
-
-        Uses the ``DOC_ID_TYPEAHEAD`` GraphQL document to find pages
-        matching the given query string.  Results are lightweight page
-        summaries suitable for resolving a page name to an ID that can
-        then be passed to :meth:`search_ads`.
-
-        Args:
-            query: The search string (e.g. a page name like "Coca-Cola").
-            country: ISO 3166-1 alpha-2 country code (default ``"US"``).
-
-        Returns:
-            A list of raw dicts, one per matching page.  Each dict
-            typically contains ``page_id``, ``page_name``,
-            ``page_profile_uri``, ``page_profile_picture_url``, etc.
-            Returns an empty list on any error or if no matches are found.
-        """
-        if not self._initialized:
-            self.initialize()
-
-        # Proactively refresh stale sessions
-        if self._is_session_stale():
-            logger.info("Session is stale, refreshing before typeahead request...")
-            if not self._refresh_session():
-                logger.error("Failed to refresh stale session for typeahead")
-                return []
-
-        variables = {
-            "queryString": query,
-            "country": country,
-            "adType": "ALL",
-            "isMobile": False,
-        }
-
-        # Use dynamically extracted doc_id if available
-        typeahead_doc_id = self._doc_ids.get(
-            "useAdLibraryTypeaheadSuggestionDataSourceQuery", DOC_ID_TYPEAHEAD
-        )
-        payload = self._build_graphql_payload(
-            doc_id=typeahead_doc_id,
-            variables=variables,
-            friendly_name="useAdLibraryTypeaheadSuggestionDataSourceQuery",
-        )
-
-        headers = dict(self._fingerprint.get_graphql_headers())
-        headers["x-fb-friendly-name"] = "useAdLibraryTypeaheadSuggestionDataSourceQuery"
-        headers["x-fb-lsd"] = self._tokens.get("lsd", "")
-        headers["referer"] = (
-            f"{self.AD_LIBRARY_URL}?active_status=all&ad_type=all"
-            f"&country={country}&q={quote(query)}"
-        )
-
-        try:
-            response = self._make_graphql_request(payload, headers)
-
-            if response.status_code != 200:
-                logger.error("Typeahead request failed: %d", response.status_code)
-                return []
-
-            text = response.text
-            if text.startswith("for (;;);"):
-                text = text[9:]
-
-            data = json.loads(text)
-
-            if "errors" in data:
-                logger.warning(
-                    "Typeahead response contained errors: %s", data["errors"]
-                )
-                # Fall through -- data may still have partial results
-
-            return self._parse_typeahead_response(data)
-
-        except (json.JSONDecodeError, CffiRequestException) as exc:
-            logger.error("Typeahead search failed: %s", exc)
-            return []
 
     def _parse_typeahead_response(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         """Parse the typeahead GraphQL response into page dicts.
@@ -1269,119 +1179,6 @@ class MetaAdsClient:
         except Exception as exc:
             logger.error("Failed to parse typeahead response: %s", exc)
             return []
-
-    def get_ad_details(
-        self, ad_archive_id: str, page_id: Optional[str] = None
-    ) -> dict[str, Any]:
-        """Fetch detailed ad data beyond what search results provide.
-
-        Approaches attempted (in order):
-
-        1. **Collated search with page_id**: If *page_id* is supplied,
-           performs a targeted search filtered by page ID and looks for
-           the specific ``ad_archive_id`` in the results.  This can
-           surface extra fields that are only returned when a page-scoped
-           query is made.
-
-        2. **Ad Library detail page** (best-effort fallback): Loads
-           ``https://www.facebook.com/ads/library/?id={archive_id}`` and
-           extracts embedded JSON data from the server-rendered HTML.
-           NOTE: this page currently returns HTTP 403 (JS challenge) to
-           non-browser clients, so this approach essentially always fails
-           fast and is kept only in case Meta relaxes that.
-
-        Args:
-            ad_archive_id: The numeric archive ID of the ad.
-            page_id: Optional page ID to enable approach 1.
-
-        Returns:
-            A dict of parsed ad detail data.  Keys are a superset of the
-            fields available in search results.
-
-        Raises:
-            NotImplementedError: If no approach yields useful data.
-        """
-        if not self._initialized:
-            self.initialize()
-
-        # ── Approach 1: targeted page-scoped search ───────────────
-        if page_id:
-            try:
-                response_data, _ = self.search_ads(
-                    query="",
-                    search_type="PAGE",
-                    page_ids=[page_id],
-                    first=30,
-                    active_status="ALL",
-                    country="ALL",
-                )
-                for ad_data in response_data.get("ads", []):
-                    found_id = str(
-                        ad_data.get("ad_archive_id")
-                        or ad_data.get("id")
-                        or ad_data.get("adArchiveID")
-                        or ""
-                    )
-                    if found_id == str(ad_archive_id):
-                        logger.debug(
-                            "Approach 1 succeeded for ad %s via page %s",
-                            ad_archive_id,
-                            page_id,
-                        )
-                        return dict(ad_data)
-            except Exception as exc:
-                logger.debug("Approach 1 failed for ad %s: %s", ad_archive_id, exc)
-
-        # ── Approach 2: Ad Library detail page (best effort) ──────
-        # This page 403s non-browser clients at the moment, so tolerate
-        # failure quickly and move on.
-        try:
-            detail_url = f"{self.AD_LIBRARY_URL}"
-            params = {
-                "id": ad_archive_id,
-                "active_status": "all",
-                "ad_type": "all",
-                "country": "ALL",
-                "media_type": "all",
-            }
-
-            headers = dict(self._fingerprint.get_default_headers())
-            headers["referer"] = self.AD_LIBRARY_URL
-            headers["sec-fetch-site"] = "same-origin"
-
-            response = self._make_request(
-                "GET",
-                detail_url,
-                params=params,
-                headers=headers,
-            )
-
-            if response.status_code == 200:
-                detail_data = self._parse_ad_detail_page(response.text, ad_archive_id)
-                if detail_data:
-                    logger.debug(
-                        "Approach 2 succeeded for ad %s: %d fields",
-                        ad_archive_id,
-                        len(detail_data),
-                    )
-                    return detail_data
-                logger.debug(
-                    "Approach 2: page loaded but no detail data found for ad %s",
-                    ad_archive_id,
-                )
-            else:
-                logger.debug(
-                    "Approach 2 failed for ad %s: HTTP %d",
-                    ad_archive_id,
-                    response.status_code,
-                )
-        except Exception as exc:
-            logger.debug("Approach 2 failed for ad %s: %s", ad_archive_id, exc)
-
-        raise NotImplementedError(
-            f"Could not retrieve detail data for ad {ad_archive_id}. "
-            "All approaches exhausted."
-        )
 
     def _parse_ad_detail_page(
         self, html: str, ad_archive_id: str

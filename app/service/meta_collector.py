@@ -77,95 +77,6 @@ class MetaCollectorService:
             proxy_logs_sync_collection(self._settings)
         )
 
-    def get_proxy(self, proxies: list[str], token: str) -> tuple[str, str]:
-        redis_client = get_redis()
-
-        while True:
-            token = os.getenv("pm_id", "")
-
-            for proxy in proxies:
-                lock_key = f"{PROXY_LOCK_PREFIX}{proxy}"
-
-                acquired = redis_client.set(lock_key, token, nx=True, ex=60 * 60)
-
-                if acquired:
-                    started = time.monotonic()
-                    try:
-                        response = requests.get(
-                            HEALTH_CHECK_URL,
-                            proxies={
-                                "https": proxy,
-                            },
-                            timeout=30,
-                        )
-                        duration_ms = int((time.monotonic() - started) * 1000)
-                        error = None
-                        if response.status_code < 200 or response.status_code >= 300:
-                            error = {
-                                "message": f"Health check returned {response.status_code}",
-                                "type": "HTTPError",
-                                "statusCode": response.status_code,
-                            }
-                        self._log_proxy_request(
-                            proxy=proxy,
-                            url=HEALTH_CHECK_URL,
-                            method="GET",
-                            status_code=response.status_code,
-                            duration_ms=duration_ms,
-                            error=error,
-                        )
-                        if response.status_code != 200:
-                            continue
-                        return proxy, lock_key
-                    except Exception as exc:
-                        duration_ms = int((time.monotonic() - started) * 1000)
-                        self._log_proxy_request(
-                            proxy=proxy,
-                            url=HEALTH_CHECK_URL,
-                            method="GET",
-                            status_code=None,
-                            duration_ms=duration_ms,
-                            error={
-                                "message": str(exc),
-                                "type": type(exc).__name__,
-                            },
-                        )
-                        continue
-
-            # Try 3 empty proxy slots
-            for slot in range(EMPTY_PROXY_SLOTS):
-                lock_key = f"{EMPTY_PROXY_LOCK_PREFIX}{slot}"
-
-                acquired = redis_client.set(lock_key, token, nx=True, ex=60 * 60)
-
-                if acquired:
-                    return "", lock_key
-
-            # Everything is busy
-            time.sleep(RETRY_INTERVAL)
-
-    def release_proxy(
-        self,
-        lock_key: str,
-        token: str,
-    ) -> None:
-        redis_client = get_redis()
-
-        lua_script = """
-            if redis.call("GET", KEYS[1]) == ARGV[1] then
-                return redis.call("DEL", KEYS[1])
-            end
-
-            return 0
-        """
-
-        redis_client.eval(
-            lua_script,
-            1,
-            lock_key,
-            token,
-        )
-
     def _log_proxy_request(
         self,
         *,
@@ -211,11 +122,6 @@ class MetaCollectorService:
         max_results: int | None = None,
         on_ad: OnAdCallback | None = None,
     ) -> int:
-        filter_config = FilterConfig(
-            start_date=datetime.combine(start_date, dt_time.min),
-            end_date=datetime.combine(end_date, dt_time.max),
-            media_type=media_type,
-        )
         logger.info(
             "Searching Meta ads keyword={!r} country={} start={} end={} "
             "max_results={} proxy_source={}",
@@ -230,7 +136,6 @@ class MetaCollectorService:
             keyword=keyword,
             country=country,
             max_results=max_results,
-            filter_config=filter_config,
             on_ad=on_ad,
             status_filter=status_filter,
             start_date=str(start_date),
@@ -338,7 +243,6 @@ class MetaCollectorService:
         country: str,
         status_filter: str | None,
         max_results: int | None,
-        filter_config: FilterConfig,
         on_ad: OnAdCallback | None,
         start_date: str | None,
         end_date: str | None,
@@ -362,20 +266,14 @@ class MetaCollectorService:
 
         def handle_request_log(
             *,
-            url: str,
-            method: str | None,
-            status_code: int | None,
-            duration_ms: int | None,
-            error: dict[str, Any] | None,
+             request_id: str = None,
+             body = None,
+             headers = None,
+             status_code = None,
+             status = None,
+             err = None
         ) -> None:
-            self._log_proxy_request(
-                proxy=proxy or "",
-                url=url,
-                method=method,
-                status_code=status_code,
-                duration_ms=duration_ms,
-                error=error,
-            )
+            self._proxy_log_repo.update_one(request_id=request_id, body=body, headers=headers, status_code=status_code, status=status, err=err)
 
         try:
             crawler = MetaAdsCrawler()
