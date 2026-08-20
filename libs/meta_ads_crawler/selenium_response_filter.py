@@ -510,10 +510,6 @@ class MetaAdsCrawler:
 
                 request_id = str(uuid7())
                 cookies = graphql_request_data["cookies"]
-                base_proxies = {
-                    "http": f"http://{request_id}:x@{proxy}",
-                    "https": f"http://{request_id}:x@{proxy}",
-                }
 
                 # Use the captured request headers
                 headers = graphql_request_data["request_headers"]
@@ -522,6 +518,7 @@ class MetaAdsCrawler:
                 captured_body = graphql_request_data["request_body"]
 
                 while cursor is not None:
+
                     try:
                         # Parse captured body and update cursor
                         body_params = dict(parse_qsl(captured_body))
@@ -539,13 +536,17 @@ class MetaAdsCrawler:
                         for retry_count in range(max_retries):
                             from curl_cffi.requests import Session as CffiSession
 
+                            request_id = str(uuid7())
                             # Each GraphQL attempt gets its own browser/TLS session.
                             session = CffiSession(impersonate="chrome")
                             for name, value in cookies.items():
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            session.proxies = base_proxies
+                            session.proxies = {
+                                "http": f"http://{request_id}:x@{proxy}",
+                                "https": f"http://{request_id}:x@{proxy}",
+                            }
 
                             if on_request_log is not None:
                                 on_request_log(
