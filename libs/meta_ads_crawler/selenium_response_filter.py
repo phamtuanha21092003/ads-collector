@@ -84,7 +84,7 @@ def create_driver(
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
     # if proxy:
-    #     options.add_argument(f"--proxy-server=http://{proxy}")
+    #     options.add_argument(f"--proxy-server=http://27.72.102.142:5199")
     chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
 
     # Pick random platform
@@ -277,7 +277,6 @@ class MetaAdsCrawler:
         """Capture network responses that match the supplied filters."""
 
         active_driver: webdriver.Chrome | None = None
-        captured_response_bodies: list[str | dict[str, Any]] = []
         emitted_ad_ids: set[str] = set()
         callback_raised = False
 
@@ -323,10 +322,9 @@ class MetaAdsCrawler:
                 emit_ads(ad)
 
             html = active_driver.page_source
-            active_driver.quit()
+            # active_driver.quit()
 
             client = MetaAdsClient(proxy=proxy, html=html)
-
             while cursor is not None:
                 response, cursor = client.search_ads(
                     cursor=cursor,
@@ -337,15 +335,14 @@ class MetaAdsCrawler:
                     end_date=end_date,
                     sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
                 )
-                print("response", response)
                 if response and hasattr(response, "ads"):
                     ads.extend(response.ads)
                     for ad in response.ads:
-                        normalize_ad(ad)
-                        emit_ads(ad)
+                        emit_ads(normalize_ad(ad))
                     print(f"Captured {len(response.ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
+            time.sleep(10000000)
             return ads
         except Exception:
             raise

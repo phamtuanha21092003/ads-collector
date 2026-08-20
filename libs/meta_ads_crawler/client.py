@@ -623,13 +623,26 @@ class MetaAdsClient:
                 )
 
             try:
-                response = self.session.request(
-                    method=method,  # type: ignore[arg-type]
-                    url=url,
-                    params=params,
-                    data=data,
+                # Use curl_cffi request directly instead of session.request
+                # to avoid connection pooling issues
+                import curl_cffi.requests as cffi_requests
+
+                # Build full URL with params for GET requests
+                full_url = url
+                if method.upper() == "GET" and params:
+                    from urllib.parse import urlencode
+
+                    full_url = f"{url}?{urlencode(params)}"
+                    params = None  # Clear params as they're now in URL
+
+                response = cffi_requests.request(
+                    method=method,
+                    url=full_url,
+                    data=data if method.upper() == "POST" else None,
                     headers=merged_headers,
                     timeout=self.timeout,
+                    proxies=self.session.proxies if self.session.proxies else None,
+                    impersonate="chrome",
                     **kwargs,
                 )
 
@@ -859,23 +872,23 @@ class MetaAdsClient:
 
         variables = {
             "activeStatus": active_status,
-            "adType": ad_type,
+            "adType": "ALL",
             "bylines": [],
-            "collationToken": collation_token,
+            "collationToken": None,
             "contentLanguages": [],
             "countries": [country],
             "excludedIDs": None,
             "first": first,
             "isTargetedCountry": False,
             "location": None,
-            "mediaType": media_type,
+            "mediaType": "all",
             "multiCountryFilterMode": None,
             "pageIDs": [],
             "potentialReachInput": None,
             "publisherPlatforms": [],
             "queryString": query,
             "regions": None,
-            "searchType": search_type,
+            "searchType": "keyword_unordered",
             "sessionID": session_id,
             "source": None,
             "startDate": {"min": start_date, "max": end_date},
@@ -890,7 +903,6 @@ class MetaAdsClient:
 
         if cursor:
             variables["cursor"] = cursor
-
         logger.debug(f"GraphQL variables: {json.dumps(variables, indent=2)}")
 
         search_doc_id = self._doc_ids.get(
