@@ -213,7 +213,7 @@ class MetaAdsCrawler:
             end_date=end_date,
             proxy=proxy,
             on_ad=on_ad,
-            on_request_log=on_request_log
+            on_request_log=on_request_log,
         )
 
         ads_by_id: dict[str, dict[str, Any]] = {}
@@ -327,7 +327,7 @@ class MetaAdsCrawler:
             html = active_driver.page_source
             # active_driver.quit()
 
-            client = MetaAdsClient(proxy=proxy, html=html)
+            client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
             while cursor is not None:
                 response, cursor = client.search_ads(
                     cursor=cursor,
@@ -337,7 +337,7 @@ class MetaAdsCrawler:
                     start_date=start_date,
                     end_date=end_date,
                     sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
-                    on_request_log=on_request_log
+                    on_request_log=on_request_log,
                 )
                 if response and hasattr(response, "ads"):
                     ads.extend(response.ads)

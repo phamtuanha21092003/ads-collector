@@ -13,7 +13,7 @@ import string
 import time
 from typing import Any, Optional, Union
 from urllib.parse import quote
-
+import requests
 from curl_cffi.requests import Session as CffiSession
 from curl_cffi.requests.exceptions import RequestException as CffiRequestException
 
@@ -647,6 +647,7 @@ class MetaAdsClient:
                     from urllib.parse import urlsplit
 
                     request_id = str(uuid7())
+
                     def add_proxy_auth(proxy: str) -> str:
                         parsed = urlsplit(proxy)
 
@@ -655,42 +656,51 @@ class MetaAdsClient:
                             f"{request_id}:x@"
                             f"{parsed.hostname}:{parsed.port}"
                         )
+
                     self.session.proxies = {
                         "http": add_proxy_auth(self.session.proxies["http"]),
                         "https": add_proxy_auth(self.session.proxies["https"]),
                     }
-                
-                response = cffi_requests.request(
-                    method=method,
+
+                response = requests.post(
                     url=full_url,
                     data=data if method.upper() == "POST" else None,
                     headers=merged_headers,
                     timeout=self.timeout,
                     proxies=self.session.proxies if self.session.proxies else None,
-                    impersonate="chrome",
                     **kwargs,
                 )
+                text = response.text
+                if not text:
+                    wait_time = self.retry_delay * (2**attempt) + random.uniform(0, 1)
+                    if attempt < self.max_retries - 1:
+                        time.sleep(wait_time)
+                    raise CffiRequestException("Proxy Ratelimit!!")
+                if text.startswith("for (;;);"):
+                    text = text[9:]
+
+                logger.debug(f"GraphQL response preview: {text[:1000]}")
+                data = json.loads(text)
+
+                if "errors" in data:
+                    errors = data.get("errors", [])
+                    for error in errors:
+                        error_code = error.get("code")
+                        error_msg = error.get("message", "Unknown error")
+
+                        if error_code == 1675004 or "rate limit" in error_msg.lower():
+                            logger.warning(
+                                f"Rate limited: {error_msg}. Waiting before retry..."
+                            )
+                            wait_time = self.retry_delay * (
+                                2**attempt
+                            ) + random.uniform(0, 1)
+                            if attempt < self.max_retries - 1:
+                                time.sleep(wait_time)
+                            raise CffiRequestException("Proxy Ratelimit!!")
+
                 if request_id and not on_request_log is None:
                     on_request_log(request_id=request_id, headers=merged_headers)
-
-                # Check for rate limiting
-                if response.status_code == 429:
-                    wait_time = self.retry_delay * (2**attempt) + random.uniform(0, 1)
-                    if current_proxy:
-                        logger.warning(
-                            f"Rate limited (429) on proxy {_sanitize_proxy(current_proxy)}. Waiting {wait_time:.2f}s before retry..."
-                        )
-                    else:
-                        logger.warning(
-                            f"Rate limited. Waiting {wait_time:.2f}s before retry..."
-                        )
-                    time.sleep(wait_time)
-                    continue
-
-                if current_proxy:
-                    logger.info(
-                        f"Meta API request success: {method} {url} using proxy {_sanitize_proxy(current_proxy)} - Status: {response.status_code}"
-                    )
 
                 return response, request_id
 
@@ -725,7 +735,11 @@ class MetaAdsClient:
         and rebuilds the payload with new tokens, then retries once.
         """
         response, request_id = self._make_request(
-            "POST", self.GRAPHQL_URL, data=payload, headers=headers, on_request_log=on_request_log
+            "POST",
+            self.GRAPHQL_URL,
+            data=payload,
+            headers=headers,
+            on_request_log=on_request_log,
         )
 
         if response.status_code == 403:
@@ -932,10 +946,17 @@ class MetaAdsClient:
         )
 
         # Make request with session refresh on auth failure
-        response, request_id = self._make_graphql_request(payload, headers, on_request_log=on_request_log)
+        response, request_id = self._make_graphql_request(
+            payload, headers, on_request_log=on_request_log
+        )
 
         if response.status_code != 200:
-            on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value)
+            on_request_log(
+                request_id=request_id,
+                body=response.text,
+                status_code=response.status_code,
+                status=ProxyLogStatus.FAILED.value,
+            )
             logger.error(f"GraphQL request failed: {response.status_code}")
             logger.debug(f"Response: {response.text[:500]}")
             raise MetaAdsError(
@@ -955,9 +976,14 @@ class MetaAdsClient:
             logger.debug(
                 f"Response keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}"
             )
-            
+
             if not on_request_log is None:
-                on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.SUCCESS.value)
+                on_request_log(
+                    request_id=request_id,
+                    body=response.text,
+                    status_code=response.status_code,
+                    status=ProxyLogStatus.SUCCESS.value,
+                )
 
             # Check for errors
             if "errors" in data:
@@ -971,7 +997,17 @@ class MetaAdsClient:
                             f"Rate limited: {error_msg}. Waiting before retry..."
                         )
                         if not on_request_log is None:
-                            on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value, err={"err": "Rate limit", "message": error_msg, "code": error_code})
+                            on_request_log(
+                                request_id=request_id,
+                                body=response.text,
+                                status_code=response.status_code,
+                                status=ProxyLogStatus.FAILED.value,
+                                err={
+                                    "err": "Rate limit",
+                                    "message": error_msg,
+                                    "code": error_code,
+                                },
+                            )
                         self._consecutive_errors += 1
                         time.sleep(5 + random.uniform(0, 3))
                         return {
@@ -982,7 +1018,13 @@ class MetaAdsClient:
                         }, None
 
                     if not on_request_log is None:
-                        on_request_log(request_id=request_id, body=response.text, status_code=response.status_code, status=ProxyLogStatus.FAILED.value, err={"message": error_msg, "code": error_code})
+                        on_request_log(
+                            request_id=request_id,
+                            body=response.text,
+                            status_code=response.status_code,
+                            status=ProxyLogStatus.FAILED.value,
+                            err={"message": error_msg, "code": error_code},
+                        )
 
                     # Session/auth errors - trigger refresh
                     if (
