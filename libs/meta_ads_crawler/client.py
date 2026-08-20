@@ -670,11 +670,16 @@ class MetaAdsClient:
                     proxies=self.session.proxies if self.session.proxies else None,
                     **kwargs,
                 )
+                if request_id and not on_request_log is None:
+                    on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.SUCCESS)
+
                 text = response.text
                 if not text:
                     wait_time = self.retry_delay * (2**attempt) + random.uniform(0, 1)
                     if attempt < self.max_retries - 1:
                         time.sleep(wait_time)
+                    if request_id and not on_request_log is None:
+                        on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"err": "Rate limit", "message": "Body is empty"})
                     raise CffiRequestException("Proxy Ratelimit!!")
                 if text.startswith("for (;;);"):
                     text = text[9:]
@@ -692,6 +697,8 @@ class MetaAdsClient:
                             logger.warning(
                                 f"Rate limited: {error_msg}. Waiting before retry..."
                             )
+                            if request_id and not on_request_log is None:
+                                on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"err": "Rate limit", "message": error_msg, "code": error_code})
                             wait_time = self.retry_delay * (
                                 2**attempt
                             ) + random.uniform(0, 1)
@@ -699,8 +706,10 @@ class MetaAdsClient:
                                 time.sleep(wait_time)
                             raise CffiRequestException("Proxy Ratelimit!!")
 
-                if request_id and not on_request_log is None:
-                    on_request_log(request_id=request_id, headers=merged_headers)
+                        if request_id and not on_request_log is None:
+                            on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"message": error_msg, "code": error_code})
+
+
 
                 return response, request_id
 
@@ -951,12 +960,13 @@ class MetaAdsClient:
         )
 
         if response.status_code != 200:
-            on_request_log(
+            if not on_request_log is None:
+                on_request_log(
                 request_id=request_id,
                 body=response.text,
                 status_code=response.status_code,
                 status=ProxyLogStatus.FAILED.value,
-            )
+                )
             logger.error(f"GraphQL request failed: {response.status_code}")
             logger.debug(f"Response: {response.text[:500]}")
             raise MetaAdsError(
