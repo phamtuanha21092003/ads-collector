@@ -312,6 +312,7 @@ class MetaAdsCrawler:
         )
         active_driver = None
         try:
+            time.sleep(1.2)
             active_driver = create_driver(proxy=proxy)
             print(f"Open Page: {page_url}")
             active_driver.get(page_url)
@@ -342,7 +343,6 @@ class MetaAdsCrawler:
                     print(f"Captured {len(response.ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
-            time.sleep(10000000)
             return ads
         except Exception:
             raise

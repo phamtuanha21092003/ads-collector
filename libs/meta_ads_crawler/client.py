@@ -635,6 +635,23 @@ class MetaAdsClient:
                     full_url = f"{url}?{urlencode(params)}"
                     params = None  # Clear params as they're now in URL
 
+                if self.session.proxies:
+                    from uuid6 import uuid7
+                    from urllib.parse import urlsplit
+
+                    request_id = str(uuid7())
+                    def add_proxy_auth(proxy: str) -> str:
+                        parsed = urlsplit(proxy)
+
+                        return (
+                            f"{parsed.scheme}://"
+                            f"{request_id}:x@"
+                            f"{parsed.hostname}:{parsed.port}"
+                        )
+                    self.session.proxies = {
+                        "http": add_proxy_auth(self.session.proxies["http"]),
+                        "https": add_proxy_auth(self.session.proxies["https"]),
+                    }
                 response = cffi_requests.request(
                     method=method,
                     url=full_url,

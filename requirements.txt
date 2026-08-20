@@ -35,3 +35,4 @@ urllib3==2.7.0
 yarl==1.24.5
 selenium==4.15.0
 openai==2.53.0
+uuid6=2025.0.1
