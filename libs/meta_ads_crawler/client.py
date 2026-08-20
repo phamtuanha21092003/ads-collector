@@ -659,9 +659,6 @@ class MetaAdsClient:
                         "http": add_proxy_auth(self.session.proxies["http"]),
                         "https": add_proxy_auth(self.session.proxies["https"]),
                     }
-                if request_id and not on_request_log is None:
-                    on_request_log(request_id=request_id, headers=merged_headers)
-                    
                 
                 response = cffi_requests.request(
                     method=method,
@@ -673,6 +670,8 @@ class MetaAdsClient:
                     impersonate="chrome",
                     **kwargs,
                 )
+                if request_id and not on_request_log is None:
+                    on_request_log(request_id=request_id, headers=merged_headers)
 
                 # Check for rate limiting
                 if response.status_code == 429:

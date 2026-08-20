@@ -273,8 +273,14 @@ class MetaCollectorService:
              status = None,
              err = None
         ) -> None:
-            self._proxy_log_repo.update_one(request_id=request_id, body=body, headers=headers, status_code=status_code, status=status, err=err)
-
+            log = self._proxy_log_repo.update_one(request_id=request_id, body=body, headers=headers, status_code=status_code, status=status, err=err)
+            if isinstance(log, dict) and isinstance(err, dict) and err.get("err") == "Rate limit":
+                if log.get("proxy"):
+                    client = get_redis()
+                    proxy = log["proxy"]
+                    key = f"proxy:lock:{proxy}"
+                    client.set(key, 'lock', ex=60)
+                    
         try:
             crawler = MetaAdsCrawler()
             ads = crawler.search(
