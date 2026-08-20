@@ -108,7 +108,7 @@ def create_driver(
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
     options.add_argument(f"--user-agent={user_agent}")
-    # options.add_argument("--headless=false")
+    options.add_argument("--headless=false")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
     options.add_argument("--lang=en-US")
