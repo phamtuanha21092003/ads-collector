@@ -418,7 +418,7 @@ class WorkerLoop:
                 continue
 
             child = JobModel(
-                keyword=domain,
+                keyword=domain.removeprefix("www."),
                 type=JobType.DOMAIN,
                 start_date=start,
                 end_date=end,
