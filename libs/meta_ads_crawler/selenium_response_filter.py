@@ -588,6 +588,7 @@ class MetaAdsCrawler:
                                     errors = response_data.get("errors", []) or []
                                     if on_request_log is not None:
                                         error = errors[0] if errors else None
+                                    if error.get("code") == 1675004:
                                         on_request_log(
                                             request_id=request_id,
                                             body=api_response.text,
@@ -609,6 +610,21 @@ class MetaAdsCrawler:
                                         in error.get("message", "").lower()
                                         for error in errors
                                     )
+                                    if is_retryable:
+                                        on_request_log(
+                                            request_id=request_id,
+                                            body=api_response.text,
+                                            status_code=api_response.status_code,
+                                            status=(
+                                                ProxyLogStatus.FAILED.value
+                                                if api_response.status_code != 200
+                                                or is_retryable
+                                                or error
+                                                else ProxyLogStatus.SUCCESS.value
+                                            ),
+                                            err={"err": "Rate limit"},
+                                        )
+
                                 except (json.JSONDecodeError, AttributeError):
                                     # A malformed successful response can be transient.
                                     is_retryable = True
