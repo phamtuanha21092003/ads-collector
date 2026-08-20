@@ -6,17 +6,129 @@ import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 
+from app.model.proxy_log_model import ProxyLogStatus
 from libs.meta_ads_collector.exceptions import RateLimitError
 from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import getAds
 import random
 from .client import MetaAdsClient
 from .meta_ads_embedded_json import normalize_ad
+
+
+def fetch_graphql_paginated_ads(
+    session: Any,
+    url: str,
+    headers: dict[str, str],
+    body: str,
+    cursor: str | None,
+    emit_ads: Callable[[dict[str, Any]], None],
+) -> list[dict[str, Any]]:
+    """
+    Fetch paginated ads from GraphQL API using captured request data.
+
+    Args:
+        session: curl_cffi session with cookies and proxy configured
+        url: GraphQL API URL
+        headers: Request headers captured from browser
+        body: Request body captured from browser
+        cursor: Initial cursor for pagination
+        emit_ads: Callback to emit each ad
+
+    Returns:
+        List of ads extracted from all pages
+    """
+    ads: list[dict[str, Any]] = []
+
+    while cursor is not None:
+        try:
+            # Parse captured body and update cursor
+            body_params = dict(parse_qsl(body))
+
+            # Update cursor in the body
+            body_params["cursor"] = cursor
+
+            # Rebuild the body
+            updated_body = urlencode(body_params)
+
+            # Make GraphQL request using captured headers and body
+            api_response = session.post(
+                url,
+                headers=headers,
+                data=updated_body,
+                timeout=30,
+            )
+
+            if api_response.status_code == 200:
+                response_text = api_response.text
+                if response_text.startswith("for (;;);"):
+                    response_text = response_text[9:]
+
+                response_data = json.loads(response_text)
+
+                # Parse response
+                results = (
+                    response_data.get("data", {})
+                    .get("ad_library_main", {})
+                    .get("search_results_connection", {})
+                )
+
+                if not results:
+                    results = (
+                        response_data.get("data", {})
+                        .get("adLibraryMain", {})
+                        .get("searchResultsConnection", {})
+                    )
+
+                if not results:
+                    results = response_data.get("data", {})
+
+                edges = results.get("edges", [])
+                page_info = results.get("page_info", {}) or results.get("pageInfo", {})
+
+                # Get next cursor
+                next_cursor = None
+                if page_info.get("has_next_page") or page_info.get("hasNextPage"):
+                    next_cursor = page_info.get("end_cursor") or page_info.get(
+                        "endCursor"
+                    )
+
+                cursor = next_cursor
+
+                # Extract ads
+                for edge in edges:
+                    node = edge.get("node", edge)
+                    if node:
+                        collated = node.get("collated_results", [])
+                        for ad_data in collated:
+                            snapshot = ad_data.get("snapshot") or {}
+                            flattened = dict(ad_data)
+                            if snapshot:
+                                for key, value in snapshot.items():
+                                    if key not in flattened:
+                                        flattened[key] = value
+                            ads.append(flattened)
+                            emit_ads(normalize_ad(flattened))
+
+                print(f"Captured {len(edges)} ads. Total: {len(ads)}")
+
+                if cursor is None:
+                    break
+            else:
+                print(f"GraphQL request failed: {api_response.status_code}")
+                print(f"Response: {api_response.text[:500]}")
+                break
+
+        except Exception as e:
+            print(f"Error processing GraphQL response: {e}")
+            break
+
+    return ads
+
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
 OnRequestLogCallback = Callable[..., None]
@@ -81,6 +193,7 @@ NOT_A_BRAND_HINTS: list[tuple[str, str]] = [
 
 def create_driver(
     proxy: str | None = None,
+    enable_performance_logging: bool = False,
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
     # if proxy:
@@ -114,6 +227,10 @@ def create_driver(
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-notifications")
     options.add_argument("--disable-dev-shm-usage")
+
+    # Enable performance logging to capture network requests
+    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
     return webdriver.Chrome(options=options)
 
 
@@ -287,6 +404,7 @@ class MetaAdsCrawler:
         ) -> None:
             """Invoke the callback once for each newly observed normalized ad."""
             nonlocal callback_raised
+            print("ok")
             if on_ad is None:
                 return
             ads = [response_body]
@@ -313,39 +431,309 @@ class MetaAdsCrawler:
             end_date=end_date,
         )
         active_driver = None
+        graphql_request_data = None
         try:
             time.sleep(1.2)
-            active_driver = create_driver(proxy=proxy)
+            # Enable performance logging to capture network requests
+            active_driver = create_driver(proxy=proxy, enable_performance_logging=True)
             print(f"Open Page: {page_url}")
             active_driver.get(page_url)
+
+            # Wait for page to load
+            time.sleep(3)
+
+            # Scroll down to trigger GraphQL API calls
+            active_driver.execute_script(
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
+            time.sleep(2)
+
+            # Extract GraphQL request data from performance logs
+            graphql_request_data = {
+                "request_headers": {},
+                "request_body": None,
+                "cookies": {},
+                "url": None,
+            }
+
+            # Get cookies from browser
+            all_cookies = active_driver.get_cookies()
+            cookies_dict = {cookie["name"]: cookie["value"] for cookie in all_cookies}
+            graphql_request_data["cookies"] = cookies_dict
+
+            # Parse performance logs to find GraphQL requests
+            logs = active_driver.get_log("performance")
+            for entry in logs:
+                try:
+                    log_data = json.loads(entry["message"])
+                    message = log_data.get("message", {})
+                    method = message.get("method", "")
+
+                    # Capture Network.requestWillBeSent for GraphQL requests
+                    if method == "Network.requestWillBeSent":
+                        request = message.get("params", {}).get("request", {})
+                        url = request.get("url", "")
+                        if "/api/graphql" in url:
+                            post_data = request.get("postData", "")
+
+                            # Check if this is AdLibrarySearchPaginationQuery
+                            if (
+                                post_data
+                                and "AdLibrarySearchPaginationQuery" in post_data
+                            ):
+                                graphql_request_data["url"] = url
+                                graphql_request_data["request_headers"] = request.get(
+                                    "headers", {}
+                                )
+                                graphql_request_data["request_body"] = post_data
+                                print(
+                                    f"Captured AdLibrarySearchPaginationQuery GraphQL request to: {url}"
+                                )
+                                break
+
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+            # Get initial ads from page
             response = getAds(active_driver)
-            ads = response.ads
-            cursor = response.cursor
+            ads = response.ads if hasattr(response, "ads") else []
+            cursor = response.cursor if hasattr(response, "cursor") else None
             for ad in ads:
                 emit_ads(ad)
 
             html = active_driver.page_source
-            # active_driver.quit()
 
-            client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
-            while cursor is not None:
-                response, cursor = client.search_ads(
-                    cursor=cursor,
-                    query=query,
-                    active_status=status,
-                    ad_type=ad_type,
-                    start_date=start_date,
-                    end_date=end_date,
-                    sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
-                    on_request_log=on_request_log,
+            # Use captured GraphQL request data to make authenticated requests
+            if graphql_request_data["url"] and graphql_request_data["request_body"]:
+                print("Using captured GraphQL request data for API calls...")
+                from uuid6 import uuid7
+
+                request_id = str(uuid7())
+                cookies = graphql_request_data["cookies"]
+                base_proxies = {
+                    "http": f"http://{request_id}:x@{proxy}",
+                    "https": f"http://{request_id}:x@{proxy}",
+                }
+
+                # Use the captured request headers
+                headers = graphql_request_data["request_headers"]
+
+                # Parse the captured request body to extract variables
+                captured_body = graphql_request_data["request_body"]
+
+                while cursor is not None:
+                    try:
+                        # Parse captured body and update cursor
+                        body_params = dict(parse_qsl(captured_body))
+
+                        # Update cursor in the body
+                        body_params["cursor"] = cursor
+
+                        # Rebuild the body
+                        updated_body = urlencode(body_params)
+
+                        # Make GraphQL request using captured headers and body with retry on rate limit
+                        max_retries = 10
+                        retry_delay = 2  # Initial delay in seconds
+
+                        for retry_count in range(max_retries):
+                            from curl_cffi.requests import Session as CffiSession
+
+                            # Each GraphQL attempt gets its own browser/TLS session.
+                            session = CffiSession(impersonate="chrome")
+                            for name, value in cookies.items():
+                                session.cookies.set(
+                                    name, value, domain=".facebook.com", path="/"
+                                )
+
+                            if on_request_log is not None:
+                                on_request_log(
+                                    request_id=request_id,
+                                    headers=headers,
+                                )
+
+                            try:
+                                api_response = session.post(
+                                    graphql_request_data["url"],
+                                    headers=headers,
+                                    data=updated_body,
+                                    timeout=30,
+                                )
+                            except Exception as error:
+                                session.close()
+                                if on_request_log is not None:
+                                    on_request_log(
+                                        request_id=request_id,
+                                        status=ProxyLogStatus.FAILED.value,
+                                        err={"message": str(error)},
+                                    )
+                                raise
+
+                            # Facebook can report a rate limit in the GraphQL
+                            # payload even when the HTTP status is 200.
+                            retryable_statuses = {429, 500, 502, 503, 504}
+                            is_retryable = (
+                                api_response.status_code in retryable_statuses
+                            )
+                            errors: list[dict[str, Any]] = []
+
+                            if api_response.status_code == 200:
+                                try:
+                                    response_text = api_response.text.removeprefix(
+                                        "for (;;);"
+                                    )
+                                    response_data = json.loads(response_text)
+                                    errors = response_data.get("errors", []) or []
+                                    if on_request_log is not None:
+                                        error = errors[0] if errors else None
+                                        on_request_log(
+                                            request_id=request_id,
+                                            body=api_response.text,
+                                            status_code=api_response.status_code,
+                                            status=(
+                                                ProxyLogStatus.FAILED.value
+                                                if api_response.status_code != 200
+                                                or is_retryable
+                                                or error
+                                                else ProxyLogStatus.SUCCESS.value
+                                            ),
+                                            err={"err": "Rate limit"},
+                                        )
+                                    is_retryable = any(
+                                        error.get("code") == 1675004
+                                        or "rate limit"
+                                        in error.get("message", "").lower()
+                                        or "temporarily unavailable"
+                                        in error.get("message", "").lower()
+                                        for error in errors
+                                    )
+                                except (json.JSONDecodeError, AttributeError):
+                                    # A malformed successful response can be transient.
+                                    is_retryable = True
+
+                            session.close()
+
+                            if not is_retryable:
+                                break
+
+                            if retry_count == max_retries - 1:
+                                print(
+                                    f"GraphQL request still failed after {max_retries} "
+                                    f"attempts (HTTP {api_response.status_code})."
+                                )
+                                break
+
+                            retry_after = api_response.headers.get("Retry-After")
+                            try:
+                                wait_time = (
+                                    float(retry_after) if retry_after else retry_delay
+                                )
+                            except ValueError:
+                                wait_time = retry_delay
+
+                            print(
+                                f"Facebook GraphQL retryable error "
+                                f"(HTTP {api_response.status_code}); retrying in "
+                                f"{wait_time:.1f}s (attempt {retry_count + 1}/"
+                                f"{max_retries})"
+                            )
+                            time.sleep(wait_time + random.uniform(0, 1))
+                            retry_delay = min(retry_delay * 2, 60)
+                            continue
+                        else:
+                            # All retries exhausted
+                            break
+
+                        if api_response.status_code == 200:
+                            response_text = api_response.text
+                            if response_text.startswith("for (;;);"):
+                                response_text = response_text[9:]
+
+                            response_data = json.loads(response_text)
+
+                            # Parse response
+                            results = (
+                                response_data.get("data", {})
+                                .get("ad_library_main", {})
+                                .get("search_results_connection", {})
+                            )
+
+                            if not results:
+                                results = (
+                                    response_data.get("data", {})
+                                    .get("adLibraryMain", {})
+                                    .get("searchResultsConnection", {})
+                                )
+
+                            if not results:
+                                results = response_data.get("data", {})
+
+                            edges = results.get("edges", [])
+                            page_info = results.get("page_info", {}) or results.get(
+                                "pageInfo", {}
+                            )
+
+                            # Get next cursor
+                            next_cursor = None
+                            if page_info.get("has_next_page") or page_info.get(
+                                "hasNextPage"
+                            ):
+                                next_cursor = page_info.get(
+                                    "end_cursor"
+                                ) or page_info.get("endCursor")
+
+                            cursor = next_cursor
+
+                            # Extract ads
+                            for edge in edges:
+                                node = edge.get("node", edge)
+                                if node:
+                                    collated = node.get("collated_results", [])
+                                    for ad_data in collated:
+                                        snapshot = ad_data.get("snapshot") or {}
+                                        flattened = dict(ad_data)
+                                        if snapshot:
+                                            for key, value in snapshot.items():
+                                                if key not in flattened:
+                                                    flattened[key] = value
+                                        ads.append(flattened)
+                                        emit_ads(normalize_ad(flattened))
+
+                            if cursor is None:
+                                break
+                        else:
+                            print(f"GraphQL request failed: {api_response.status_code}")
+                            break
+
+                    except Exception as e:
+                        print(f"Error processing GraphQL response: {e}")
+                        break
+
+                session.close()
+            else:
+                print(
+                    "No GraphQL request data captured, falling back to MetaAdsClient..."
                 )
-                if response and isinstance(response, dict):
-                    print("response oke")
-                    response_ads = response.get("ads", [])
-                    ads.extend(response_ads)
-                    for ad in response_ads:
-                        emit_ads(normalize_ad(ad))
-                    print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
+                # Fallback to MetaAdsClient if no captured data
+                client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
+                while cursor is not None:
+                    response, cursor = client.search_ads(
+                        cursor=cursor,
+                        query=query,
+                        active_status=status,
+                        ad_type=ad_type,
+                        start_date=start_date,
+                        end_date=end_date,
+                        sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
+                        on_request_log=on_request_log,
+                    )
+                    if response and isinstance(response, dict):
+                        print("response oke")
+                        response_ads = response.get("ads", [])
+                        ads.extend(response_ads)
+                        for ad in response_ads:
+                            emit_ads(normalize_ad(ad))
+                        print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
             return ads

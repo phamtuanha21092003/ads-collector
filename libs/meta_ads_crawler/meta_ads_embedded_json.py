@@ -185,7 +185,7 @@ def extract_reponse_from_scripts(script_contents: list[str]) -> AdsResponse:
 
 def getAds(driver: webdriver.Chrome) -> AdsResponse:
     try:
-        wait_for_embedded_ads(driver, 30)
+        wait_for_embedded_ads(driver, 300)
     except TimeoutException:
         raise RuntimeError(
             "Không tìm thấy JSON quảng cáo. Trang có thể yêu cầu cookie, "
