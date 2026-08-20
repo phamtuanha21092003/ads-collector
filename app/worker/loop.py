@@ -501,7 +501,6 @@ class WorkerLoop:
             nonlocal new_saved
             if not (raw.get("cta_type") == "SHOP_NOW" and raw.get("link_url")):
                 return
-
             link_url = raw.get("link_url")
             if not isinstance(link_url, str) or not link_url:
                 return

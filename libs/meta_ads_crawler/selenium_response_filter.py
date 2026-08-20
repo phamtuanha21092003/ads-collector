@@ -339,11 +339,13 @@ class MetaAdsCrawler:
                     sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
                     on_request_log=on_request_log,
                 )
-                if response and hasattr(response, "ads"):
-                    ads.extend(response.ads)
-                    for ad in response.ads:
+                if response and isinstance(response, dict):
+                    print("response oke")
+                    response_ads = response.get("ads", [])
+                    ads.extend(response_ads)
+                    for ad in response_ads:
                         emit_ads(normalize_ad(ad))
-                    print(f"Captured {len(response.ads)} ads. Total: {len(ads)}")
+                    print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
             return ads
