@@ -545,6 +545,7 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
+                            session.proxies = base_proxies
 
                             if on_request_log is not None:
                                 on_request_log(
