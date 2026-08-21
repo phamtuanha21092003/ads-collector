@@ -15,7 +15,7 @@ def send_telegram_message(
         response = requests.post(
             url,
             json={
-                "chat_id": '-5118182724',
+                "chat_id": '-5451045176',
                 "text": message,
             },
             timeout=10,

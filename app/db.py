@@ -51,6 +51,10 @@ def proxy_logs_sync_collection(settings: Settings) -> Collection:
     return get_client(settings).delegate[settings.db_name]["proxy_logs"]
 
 
+def proxies_sync_collection(settings: Settings) -> Collection:
+    return get_client(settings).delegate[settings.db_name]["proxies"]
+
+
 async def close_client() -> None:
     global _client
     if _client is not None:

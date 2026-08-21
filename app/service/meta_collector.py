@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from redis import Redis
 import requests
 import time
 from collections.abc import Callable
@@ -32,9 +33,17 @@ from tenacity import (
 )
 from app.redis import LOCK_PROXY_KEY_VALUE, get_client as get_redis
 
-from app.service.proxy_scrape import ProxyScrapeService
+from app.service.proxy_scrape import (
+    ProxyScrapeService,
+    normalize_proxy_to_host_port_user_pass,
+)
 from app.service.proxy_rotation import ProxyRotationService
-from app.db import close_client, proxy_logs_sync_collection, system_configs_collection
+from app.db import (
+    close_client,
+    proxies_sync_collection,
+    proxy_logs_sync_collection,
+    system_configs_collection,
+)
 from app.util.telegram_util import send_telegram_message
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
@@ -132,6 +141,28 @@ class MetaCollectorService:
             return list(self._proxy_pool.alive_proxies)
 
         return []
+
+    @staticmethod
+    def _standard_proxy_format(raw: str) -> str:
+        """Normalize to host:port or host:port:user:pass (Redis lock key)."""
+        return normalize_proxy_to_host_port_user_pass(raw) or raw.strip()
+
+    def _locked_proxy_counts(self, client: Redis) -> tuple[int, int]:
+        locked = 0
+        cursor = 0
+        while True:
+            cursor, keys = client.scan(
+                cursor, match=f"{PROXY_LOCK_PREFIX}*", count=200
+            )
+            locked += sum(
+                1
+                for key in keys
+                if not str(key).startswith(EMPTY_PROXY_LOCK_PREFIX)
+            )
+            if cursor == 0:
+                break
+        total = proxies_sync_collection(self._settings).count_documents({})
+        return locked, int(total)
 
     def _random_proxy_for_search(self) -> ProxyPool | str | None:
         candidates = self._proxy_candidates()
@@ -256,11 +287,32 @@ class MetaCollectorService:
                 and isinstance(err, dict)
                 and err.get("err") == "Rate limit"
             ):
-                if log.get("proxy"):
-                    client = get_redis()
-                    proxy = log["proxy"]
-                    key = f"proxy:lock:{proxy}"
-                    client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 5)
+                raw_proxy = log.get("proxy")
+                if not raw_proxy:
+                    return
+
+                proxy = self._standard_proxy_format(str(raw_proxy))
+                client = get_redis()
+                key = f"{PROXY_LOCK_PREFIX}{raw_proxy}"
+                value = client.get(key)
+                client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 30)
+
+                if value == LOCK_PROXY_KEY_VALUE:
+                    return
+
+                locked, total = self._locked_proxy_counts(client)
+                print(f"proxy={proxy} locked={raw_proxy}/{total}")
+                logger.info(
+                    "Rate-limit proxy standard={} raw={} locked={}/{}",
+                    proxy,
+                    raw_proxy,
+                    locked,
+                    total,
+                )
+
+                send_telegram_message(
+                    f"Proxy {proxy} is locked for the next 30 minutes ({locked}/{total})"
+                )
 
         try:
             crawler = MetaAdsCrawler()
