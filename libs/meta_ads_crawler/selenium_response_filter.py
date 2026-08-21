@@ -643,6 +643,7 @@ class MetaAdsCrawler:
                 # Fallback to MetaAdsClient if no captured data
                 client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
                 while cursor is not None:
+                    time.sleep(1.2)
                     response, cursor = client.search_ads(
                         cursor=cursor,
                         query=query,
