@@ -5,7 +5,7 @@ import os
 def send_telegram_message(
     message: str,
 ) -> bool:
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "8843853014:AAEpSYJljGJYb4F6qsAFuq1FFWJUlkuEjng")
     if not bot_token:
         return False
 
