@@ -155,7 +155,6 @@ class AIClient:
         except RateLimitError:
             log.warning("AI rate limit reached; skipping keyword analysis")
             return ""
-        print(response)
         return self._response_text(response)
 
     def _llm_analyze_keywords(

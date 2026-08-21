@@ -227,10 +227,10 @@ class MetaCollectorService:
                 return
             if futures:
                 self._raise_if_failed(futures)
-            # The crawler returns this list in descending total-impressions order.
-            rank = count + 1
-            futures.append(_executor.submit(on_ad, ad, link_ads_url, rank))
             count += 1
+            # The crawler returns this list in descending total-impressions order.
+            rank = count
+            futures.append(_executor.submit(on_ad, ad, link_ads_url, rank))
 
         def handle_request_log(
             *,
@@ -256,7 +256,6 @@ class MetaCollectorService:
                 and isinstance(err, dict)
                 and err.get("err") == "Rate limit"
             ):
-                print("errr")
                 if log.get("proxy"):
                     client = get_redis()
                     proxy = log["proxy"]

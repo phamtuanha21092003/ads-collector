@@ -293,7 +293,6 @@ class MetaAdsCrawler:
         ) -> None:
             """Invoke the callback once for each newly observed normalized ad."""
             nonlocal callback_raised
-            print("ok")
             if on_ad is None:
                 return
             ads = [response_body]
