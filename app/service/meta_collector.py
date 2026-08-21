@@ -253,6 +253,7 @@ class MetaCollectorService:
                 and isinstance(err, dict)
                 and err.get("err") == "Rate limit"
             ):
+                print("errr")
                 if log.get("proxy"):
                     client = get_redis()
                     proxy = log["proxy"]

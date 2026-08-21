@@ -498,9 +498,12 @@ class MetaAdsCrawler:
             response = getAds(active_driver)
             ads = response.ads if hasattr(response, "ads") else []
             cursor = response.cursor if hasattr(response, "cursor") else None
+
+            print(cursor)
             for ad in ads:
                 emit_ads(ad)
-
+            if not cursor:
+                return ads
             html = active_driver.page_source
 
             # Use captured GraphQL request data to make authenticated requests
@@ -563,6 +566,8 @@ class MetaAdsCrawler:
                                 )
                             except Exception as error:
                                 session.close()
+                                print("error")
+
                                 if on_request_log is not None:
                                     on_request_log(
                                         request_id=request_id,
@@ -586,22 +591,6 @@ class MetaAdsCrawler:
                                     )
                                     response_data = json.loads(response_text)
                                     errors = response_data.get("errors", []) or []
-                                    if on_request_log is not None:
-                                        error = errors[0] if errors else None
-                                    if error.get("code") == 1675004:
-                                        on_request_log(
-                                            request_id=request_id,
-                                            body=api_response.text,
-                                            status_code=api_response.status_code,
-                                            status=(
-                                                ProxyLogStatus.FAILED.value
-                                                if api_response.status_code != 200
-                                                or is_retryable
-                                                or error
-                                                else ProxyLogStatus.SUCCESS.value
-                                            ),
-                                            err={"err": "Rate limit"},
-                                        )
                                     is_retryable = any(
                                         error.get("code") == 1675004
                                         or "rate limit"
@@ -610,22 +599,26 @@ class MetaAdsCrawler:
                                         in error.get("message", "").lower()
                                         for error in errors
                                     )
-                                    if is_retryable:
+                                    error = errors[0] if errors else None
+
+                                    if on_request_log is not None:
                                         on_request_log(
                                             request_id=request_id,
                                             body=api_response.text,
                                             status_code=api_response.status_code,
                                             status=(
                                                 ProxyLogStatus.FAILED.value
-                                                if api_response.status_code != 200
-                                                or is_retryable
-                                                or error
+                                                if is_retryable or error
                                                 else ProxyLogStatus.SUCCESS.value
                                             ),
-                                            err={"err": "Rate limit"},
+                                            err=(
+                                                {"err": "Rate limit"}
+                                                if is_retryable
+                                                else error
+                                            ),
                                         )
 
-                                except (json.JSONDecodeError, AttributeError):
+                                except json.JSONDecodeError:
                                     # A malformed successful response can be transient.
                                     is_retryable = True
 
