@@ -30,7 +30,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from app.redis import get_client as get_redis
+from app.redis import LOCK_PROXY_KEY_VALUE, get_client as get_redis
 
 from app.service.proxy_scrape import ProxyScrapeService
 from app.service.proxy_rotation import ProxyRotationService
@@ -76,39 +76,6 @@ class MetaCollectorService:
         self._proxy_log_repo = proxy_log_repo or ProxyLogRepository(
             proxy_logs_sync_collection(self._settings)
         )
-
-    def _log_proxy_request(
-        self,
-        *,
-        proxy: str,
-        url: str,
-        method: str | None,
-        status_code: int | None,
-        duration_ms: int | None,
-        error: dict[str, Any] | None = None,
-    ) -> None:
-        try:
-            status = ProxyLogStatus.SUCCESS
-            if (
-                error is not None
-                or status_code is None
-                or status_code < 200
-                or status_code >= 300
-            ):
-                status = ProxyLogStatus.FAILED
-            self._proxy_log_repo.insert_one(
-                ProxyLogModel(
-                    proxy=proxy,
-                    status=status,
-                    url=url,
-                    method=method,
-                    status_code=status_code,
-                    duration_ms=duration_ms,
-                    error=error,
-                )
-            )
-        except Exception:
-            logger.exception("Failed to write proxy log")
 
     def search(
         self,
@@ -290,7 +257,7 @@ class MetaCollectorService:
                     client = get_redis()
                     proxy = log["proxy"]
                     key = f"proxy:lock:{proxy}"
-                    client.set(key, "lock", ex=60 * 5)
+                    client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 5)
 
         try:
             crawler = MetaAdsCrawler()

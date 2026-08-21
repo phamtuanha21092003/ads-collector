@@ -32,3 +32,5 @@ def get_client() -> Redis:
     if _redis_client is None:
         raise RuntimeError("Redis is not connected")
     return _redis_client
+
+LOCK_PROXY_KEY_VALUE = "lock-by-ads-collector"
