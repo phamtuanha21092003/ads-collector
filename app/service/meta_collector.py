@@ -295,7 +295,7 @@ class MetaCollectorService:
                 client = get_redis()
                 key = f"{PROXY_LOCK_PREFIX}{raw_proxy}"
                 value = client.get(key)
-                client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 30)
+                client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 10)
 
                 if value == LOCK_PROXY_KEY_VALUE:
                     return
@@ -311,7 +311,7 @@ class MetaCollectorService:
                 )
 
                 send_telegram_message(
-                    f"Proxy {proxy} is locked for the next 30 minutes ({locked}/{total})"
+                    f"Proxy {proxy} is locked for the next 10 minutes ({locked}/{total})"
                 )
 
         try:
