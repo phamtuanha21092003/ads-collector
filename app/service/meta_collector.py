@@ -157,7 +157,7 @@ class MetaCollectorService:
             locked += sum(
                 1
                 for key in keys
-                if not str(key).startswith(EMPTY_PROXY_LOCK_PREFIX)
+                if not str(key).startswith(EMPTY_PROXY_LOCK_PREFIX) and client.get(key) == LOCK_PROXY_KEY_VALUE
             )
             if cursor == 0:
                 break
