@@ -35,6 +35,7 @@ from app.redis import LOCK_PROXY_KEY_VALUE, get_client as get_redis
 from app.service.proxy_scrape import ProxyScrapeService
 from app.service.proxy_rotation import ProxyRotationService
 from app.db import close_client, proxy_logs_sync_collection, system_configs_collection
+from app.util.telegram_util import send_telegram_message
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
 

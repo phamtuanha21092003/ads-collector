@@ -149,9 +149,9 @@ class WorkerLoop:
                 f"Attempt: {retry_count + 1}/{self._settings.rabbitmq_max_retries}\n"
             )
 
-            send_telegram_message(
-                message=telegram_message,
-            )
+            # send_telegram_message(
+            #     message=telegram_message,
+            # )
             await self._process_job(job)
             await message.ack()
             telegram_done_message = (
@@ -161,9 +161,9 @@ class WorkerLoop:
                 f"Type: {job.type}\n"
                 f"Level: {level}\n"
             )
-            send_telegram_message(
-                message=telegram_done_message,
-            )
+            # send_telegram_message(
+            #     message=telegram_done_message,
+            # )
         except Exception as exc:
             logger.exception(
                 "Job {} failed on attempt {}/{}: {}",
@@ -234,9 +234,9 @@ class WorkerLoop:
                 f"Attempt: {retry_count + 1}/{self._settings.rabbitmq_max_retries}\n"
             )
 
-            send_telegram_message(
-                message=telegram_failed_message,
-            )
+            # send_telegram_message(
+            #     message=telegram_failed_message,
+            # )
 
         await message.reject(requeue=False)
         logger.error(
