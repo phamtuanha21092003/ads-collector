@@ -239,6 +239,7 @@ class MetaCollectorService:
             status_code=None,
             status=None,
             err=None,
+            request_body=None,
         ) -> None:
             log = self._proxy_log_repo.update_one(
                 request_id=request_id,
@@ -247,6 +248,7 @@ class MetaCollectorService:
                 status_code=status_code,
                 status=status,
                 err=err,
+                request_body=request_body,
             )
             if (
                 isinstance(log, dict)

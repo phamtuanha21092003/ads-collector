@@ -551,12 +551,6 @@ class MetaAdsCrawler:
                                 "https": f"http://{request_id}:x@{proxy}",
                             }
 
-                            if on_request_log is not None:
-                                on_request_log(
-                                    request_id=request_id,
-                                    headers=headers,
-                                )
-
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],
@@ -564,6 +558,13 @@ class MetaAdsCrawler:
                                     data=updated_body,
                                     timeout=30,
                                 )
+                                if on_request_log is not None:
+                                    on_request_log(
+                                        request_id=request_id,
+                                        headers=headers,
+                                        request_body=updated_body
+                                    )
+
                             except Exception as error:
                                 session.close()
                                 print("error")

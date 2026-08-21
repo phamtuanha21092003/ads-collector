@@ -26,6 +26,7 @@ class ProxyLogRepository:
         status_code: Optional[int] = None,
         status: Optional[str] = None,
         err: Any = None,
+        request_body: Any = None,
     ) -> Any:
         try:
         
@@ -45,6 +46,9 @@ class ProxyLogRepository:
 
             if err is not None:
                 update_data["err"] = err
+
+            if request_body is not None:
+                update_data["requestBody"] = request_body
 
             if not update_data:
                 return
