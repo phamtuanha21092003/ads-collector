@@ -19,117 +19,6 @@ import random
 from .client import MetaAdsClient
 from .meta_ads_embedded_json import normalize_ad
 
-
-def fetch_graphql_paginated_ads(
-    session: Any,
-    url: str,
-    headers: dict[str, str],
-    body: str,
-    cursor: str | None,
-    emit_ads: Callable[[dict[str, Any]], None],
-) -> list[dict[str, Any]]:
-    """
-    Fetch paginated ads from GraphQL API using captured request data.
-
-    Args:
-        session: curl_cffi session with cookies and proxy configured
-        url: GraphQL API URL
-        headers: Request headers captured from browser
-        body: Request body captured from browser
-        cursor: Initial cursor for pagination
-        emit_ads: Callback to emit each ad
-
-    Returns:
-        List of ads extracted from all pages
-    """
-    ads: list[dict[str, Any]] = []
-
-    while cursor is not None:
-        try:
-            # Parse captured body and update cursor
-            body_params = dict(parse_qsl(body))
-
-            # Update cursor in the body
-            body_params["cursor"] = cursor
-
-            # Rebuild the body
-            updated_body = urlencode(body_params)
-
-            # Make GraphQL request using captured headers and body
-            api_response = session.post(
-                url,
-                headers=headers,
-                data=updated_body,
-                timeout=30,
-            )
-
-            if api_response.status_code == 200:
-                response_text = api_response.text
-                if response_text.startswith("for (;;);"):
-                    response_text = response_text[9:]
-
-                response_data = json.loads(response_text)
-
-                # Parse response
-                results = (
-                    response_data.get("data", {})
-                    .get("ad_library_main", {})
-                    .get("search_results_connection", {})
-                )
-
-                if not results:
-                    results = (
-                        response_data.get("data", {})
-                        .get("adLibraryMain", {})
-                        .get("searchResultsConnection", {})
-                    )
-
-                if not results:
-                    results = response_data.get("data", {})
-
-                edges = results.get("edges", [])
-                page_info = results.get("page_info", {}) or results.get("pageInfo", {})
-
-                # Get next cursor
-                next_cursor = None
-                if page_info.get("has_next_page") or page_info.get("hasNextPage"):
-                    next_cursor = page_info.get("end_cursor") or page_info.get(
-                        "endCursor"
-                    )
-
-                cursor = next_cursor
-
-                # Extract ads
-                for edge in edges:
-                    node = edge.get("node", edge)
-                    if node:
-                        collated = node.get("collated_results", [])
-                        for ad_data in collated:
-                            snapshot = ad_data.get("snapshot") or {}
-                            flattened = dict(ad_data)
-                            if snapshot:
-                                for key, value in snapshot.items():
-                                    if key not in flattened:
-                                        flattened[key] = value
-                            ads.append(flattened)
-                            emit_ads(normalize_ad(flattened))
-
-                print(f"Captured {len(edges)} ads. Total: {len(ads)}")
-
-                if cursor is None:
-                    break
-            else:
-                print(f"GraphQL request failed: {api_response.status_code}")
-                print(f"Response: {api_response.text[:500]}")
-                break
-
-        except Exception as e:
-            print(f"Error processing GraphQL response: {e}")
-            break
-
-    return ads
-
-
 OnAdCallback = Callable[[dict[str, Any], str], None]
 OnRequestLogCallback = Callable[..., None]
 AD_LIBRARY_URL = "https://www.facebook.com/ads/library/"
@@ -520,6 +409,11 @@ class MetaAdsCrawler:
                 # Parse the captured request body to extract variables
                 captured_body = graphql_request_data["request_body"]
 
+                processing_max_retries = 3
+                processing_retry_count = 0
+                processing_retry_delay = 2
+                session: Any | None = None
+
                 while cursor is not None:
 
                     try:
@@ -562,7 +456,7 @@ class MetaAdsCrawler:
                                     on_request_log(
                                         request_id=request_id,
                                         headers=headers,
-                                        request_body=updated_body
+                                        request_body=updated_body,
                                     )
 
                             except Exception as error:
@@ -590,6 +484,7 @@ class MetaAdsCrawler:
                                     response_text = api_response.text.removeprefix(
                                         "for (;;);"
                                     )
+                                    print(response_text)
                                     response_data = json.loads(response_text)
                                     errors = response_data.get("errors", []) or []
                                     is_retryable = any(
@@ -601,7 +496,6 @@ class MetaAdsCrawler:
                                         for error in errors
                                     )
                                     error = errors[0] if errors else None
-
                                     if on_request_log is not None:
                                         on_request_log(
                                             request_id=request_id,
@@ -711,6 +605,11 @@ class MetaAdsCrawler:
                                         ads.append(flattened)
                                         emit_ads(normalize_ad(flattened))
 
+                            # Reset the retry budget once this page has been
+                            # successfully parsed and emitted.
+                            processing_retry_count = 0
+                            processing_retry_delay = 2
+
                             if cursor is None:
                                 break
                         else:
@@ -718,10 +617,26 @@ class MetaAdsCrawler:
                             break
 
                     except Exception as e:
-                        print(f"Error processing GraphQL response: {e}")
-                        break
+                        processing_retry_count += 1
+                        if processing_retry_count >= processing_max_retries:
+                            print(
+                                "Error processing GraphQL response after "
+                                f"{processing_max_retries} attempts: {e}"
+                            )
+                            break
 
-                session.close()
+                        wait_time = processing_retry_delay
+                        print(
+                            f"Error processing GraphQL response: {e}. Retrying in "
+                            f"{wait_time:.1f}s (attempt {processing_retry_count}/"
+                            f"{processing_max_retries})"
+                        )
+                        time.sleep(wait_time + random.uniform(0, 1))
+                        processing_retry_delay = min(processing_retry_delay * 2, 60)
+                        continue
+
+                if session is not None:
+                    session.close()
             else:
                 print(
                     "No GraphQL request data captured, falling back to MetaAdsClient..."
