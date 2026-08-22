@@ -328,7 +328,7 @@ class MetaAdsCrawler:
             active_driver.get(page_url)
 
             # Wait for page to load
-            time.sleep(3)
+            time.sleep(10)
 
             # Scroll down to trigger GraphQL API calls
             active_driver.execute_script(
@@ -387,7 +387,6 @@ class MetaAdsCrawler:
             ads = response.ads if hasattr(response, "ads") else []
             cursor = response.cursor if hasattr(response, "cursor") else None
 
-            print(cursor)
             for ad in ads:
                 emit_ads(ad)
             if not cursor:
@@ -408,13 +407,13 @@ class MetaAdsCrawler:
                 # Parse the captured request body to extract variables
                 captured_body = graphql_request_data["request_body"]
 
-                processing_max_retries = 3
+                processing_max_retries = 5
                 processing_retry_count = 0
                 processing_retry_delay = 2
                 session: Any | None = None
 
                 while cursor is not None:
-
+                    time.sleep(1.2)
                     try:
                         # Parse captured body and update cursor
                         body_params = dict(parse_qsl(captured_body))
@@ -460,8 +459,6 @@ class MetaAdsCrawler:
 
                             except Exception as error:
                                 session.close()
-                                print("error")
-
                                 if on_request_log is not None:
                                     on_request_log(
                                         request_id=request_id,
@@ -483,7 +480,6 @@ class MetaAdsCrawler:
                                     response_text = api_response.text.removeprefix(
                                         "for (;;);"
                                     )
-                                    print(response_text)
                                     response_data = json.loads(response_text)
                                     errors = response_data.get("errors", []) or []
                                     is_retryable = any(
@@ -636,31 +632,31 @@ class MetaAdsCrawler:
 
                 if session is not None:
                     session.close()
-            else:
-                print(
-                    "No GraphQL request data captured, falling back to MetaAdsClient..."
-                )
-                # Fallback to MetaAdsClient if no captured data
-                client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
-                while cursor is not None:
-                    time.sleep(1.2)
-                    response, cursor = client.search_ads(
-                        cursor=cursor,
-                        query=query,
-                        active_status=status,
-                        ad_type=ad_type,
-                        start_date=start_date,
-                        end_date=end_date,
-                        sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
-                        on_request_log=on_request_log,
-                    )
-                    if response and isinstance(response, dict):
-                        print("response oke")
-                        response_ads = response.get("ads", [])
-                        ads.extend(response_ads)
-                        for ad in response_ads:
-                            emit_ads(normalize_ad(ad))
-                        print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
+            # else:
+            #     print(
+            #         "No GraphQL request data captured, falling back to MetaAdsClient..."
+            #     )
+            #     # Fallback to MetaAdsClient if no captured data
+            #     client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
+            #     while cursor is not None:
+            #         time.sleep(1.2)
+            #         response, cursor = client.search_ads(
+            #             cursor=cursor,
+            #             query=query,
+            #             active_status=status,
+            #             ad_type=ad_type,
+            #             start_date=start_date,
+            #             end_date=end_date,
+            #             sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
+            #             on_request_log=on_request_log,
+            #         )
+            #         if response and isinstance(response, dict):
+            #             print("response oke")
+            #             response_ads = response.get("ads", [])
+            #             ads.extend(response_ads)
+            #             for ad in response_ads:
+            #                 emit_ads(normalize_ad(ad))
+            #             print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
             return ads
