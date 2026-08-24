@@ -413,6 +413,7 @@ class MetaAdsCrawler:
                 body_params = dict(parse_qsl(captured_body))
                 body_params["variables"] = json.loads(body_params["variables"])
                 counter = int(body_params["__req"])
+                active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
                     try:
@@ -446,10 +447,10 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            session.proxies = {
-                                "http": f"http://{request_id}:x@{proxy}",
-                                "https": f"http://{request_id}:x@{proxy}",
-                            }
+                            # session.proxies = {
+                            #     "http": f"http://{request_id}:x@{proxy}",
+                            #     "https": f"http://{request_id}:x@{proxy}",
+                            # }
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],
