@@ -446,11 +446,10 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            # session.proxies = {
-                            #     "http": f"http://{request_id}:x@{proxy}",
-                            #     "https": f"http://{request_id}:x@{proxy}",
-                            # }
-                            print(updated_body)
+                            session.proxies = {
+                                "http": f"http://{request_id}:x@{proxy}",
+                                "https": f"http://{request_id}:x@{proxy}",
+                            }
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],
