@@ -671,7 +671,12 @@ class MetaAdsClient:
                     **kwargs,
                 )
                 if request_id and not on_request_log is None:
-                    on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.SUCCESS)
+                    on_request_log(
+                        request_id=request_id,
+                        headers=merged_headers,
+                        body=response.text,
+                        status=ProxyLogStatus.SUCCESS,
+                    )
 
                 text = response.text
                 if not text:
@@ -679,7 +684,13 @@ class MetaAdsClient:
                     if attempt < self.max_retries - 1:
                         time.sleep(wait_time)
                     if request_id and not on_request_log is None:
-                        on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"err": "Rate limit", "message": "Body is empty"})
+                        on_request_log(
+                            request_id=request_id,
+                            headers=merged_headers,
+                            body=response.text,
+                            status=ProxyLogStatus.FAILED,
+                            err={"err": "Rate limit", "message": "Body is empty"},
+                        )
                     raise CffiRequestException("Proxy Ratelimit!!")
                 if text.startswith("for (;;);"):
                     text = text[9:]
@@ -698,7 +709,17 @@ class MetaAdsClient:
                                 f"Rate limited: {error_msg}. Waiting before retry..."
                             )
                             if request_id and not on_request_log is None:
-                                on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"err": "Rate limit", "message": error_msg, "code": error_code})
+                                on_request_log(
+                                    request_id=request_id,
+                                    headers=merged_headers,
+                                    body=response.text,
+                                    status=ProxyLogStatus.FAILED,
+                                    err={
+                                        "err": "Rate limit",
+                                        "message": error_msg,
+                                        "code": error_code,
+                                    },
+                                )
                             wait_time = self.retry_delay * (
                                 2**attempt
                             ) + random.uniform(0, 1)
@@ -707,9 +728,13 @@ class MetaAdsClient:
                             raise CffiRequestException("Proxy Ratelimit!!")
 
                         if request_id and not on_request_log is None:
-                            on_request_log(request_id=request_id, headers=merged_headers, body=response.text, status=ProxyLogStatus.FAILED, err={"message": error_msg, "code": error_code})
-
-
+                            on_request_log(
+                                request_id=request_id,
+                                headers=merged_headers,
+                                body=response.text,
+                                status=ProxyLogStatus.FAILED,
+                                err={"message": error_msg, "code": error_code},
+                            )
 
                 return response, request_id
 
@@ -962,10 +987,10 @@ class MetaAdsClient:
         if response.status_code != 200:
             if not on_request_log is None:
                 on_request_log(
-                request_id=request_id,
-                body=response.text,
-                status_code=response.status_code,
-                status=ProxyLogStatus.FAILED.value,
+                    request_id=request_id,
+                    body=response.text,
+                    status_code=response.status_code,
+                    status=ProxyLogStatus.FAILED.value,
                 )
             logger.error(f"GraphQL request failed: {response.status_code}")
             logger.debug(f"Response: {response.text[:500]}")

@@ -391,7 +391,6 @@ class MetaAdsCrawler:
                 emit_ads(ad)
             if not cursor:
                 return ads
-            html = active_driver.page_source
 
             # Use captured GraphQL request data to make authenticated requests
             if graphql_request_data["url"] and graphql_request_data["request_body"]:
@@ -411,18 +410,27 @@ class MetaAdsCrawler:
                 processing_retry_count = 0
                 processing_retry_delay = 2
                 session: Any | None = None
-
+                body_params = dict(parse_qsl(captured_body))
+                body_params["variables"] = json.loads(body_params["variables"])
+                counter = int(body_params["__req"])
                 while cursor is not None:
                     time.sleep(1.2)
                     try:
                         # Parse captured body and update cursor
-                        body_params = dict(parse_qsl(captured_body))
 
                         # Update cursor in the body
-                        body_params["cursor"] = cursor
-
+                        body_params["variables"]["cursor"] = cursor
+                        body_params["__req"] = self._encode_request_id(counter)
+                        counter = counter + 1
                         # Rebuild the body
-                        updated_body = urlencode(body_params)
+                        updated_body = urlencode(
+                            {
+                                **body_params,
+                                "variables": json.dumps(
+                                    body_params["variables"], separators=(",", ":")
+                                ),
+                            }
+                        )
 
                         # Make GraphQL request using captured headers and body with retry on rate limit
                         max_retries = 10
@@ -438,11 +446,11 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            session.proxies = {
-                                "http": f"http://{request_id}:x@{proxy}",
-                                "https": f"http://{request_id}:x@{proxy}",
-                            }
-
+                            # session.proxies = {
+                            #     "http": f"http://{request_id}:x@{proxy}",
+                            #     "https": f"http://{request_id}:x@{proxy}",
+                            # }
+                            print(updated_body)
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],
@@ -551,7 +559,6 @@ class MetaAdsCrawler:
                                 response_text = response_text[9:]
 
                             response_data = json.loads(response_text)
-
                             # Parse response
                             results = (
                                 response_data.get("data", {})
@@ -573,7 +580,6 @@ class MetaAdsCrawler:
                             page_info = results.get("page_info", {}) or results.get(
                                 "pageInfo", {}
                             )
-
                             # Get next cursor
                             next_cursor = None
                             if page_info.get("has_next_page") or page_info.get(
@@ -586,6 +592,7 @@ class MetaAdsCrawler:
                             cursor = next_cursor
 
                             # Extract ads
+                            ads_count = 0
                             for edge in edges:
                                 node = edge.get("node", edge)
                                 if node:
@@ -593,13 +600,19 @@ class MetaAdsCrawler:
                                     for ad_data in collated:
                                         snapshot = ad_data.get("snapshot") or {}
                                         flattened = dict(ad_data)
+                                        ads_count = ads_count + 1
                                         if snapshot:
                                             for key, value in snapshot.items():
                                                 if key not in flattened:
                                                     flattened[key] = value
                                         ads.append(flattened)
                                         emit_ads(normalize_ad(flattened))
-
+                            print(
+                                f"Facebook GraphQL successfully "
+                                f"(HTTP {api_response.status_code}) "
+                                f"Result: {ads_count} "
+                                f"next cursor: {cursor}"
+                            )
                             # Reset the retry budget once this page has been
                             # successfully parsed and emitted.
                             processing_retry_count = 0
@@ -665,3 +678,14 @@ class MetaAdsCrawler:
         finally:
             if active_driver is not None:
                 active_driver.quit()
+
+    def _encode_request_id(self, counter: int) -> str:
+        """Encode the request counter as a base-36 string."""
+        if counter < 10:
+            return str(counter)
+        chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+        result = ""
+        while counter:
+            result = chars[counter % 36] + result
+            counter //= 36
+        return result
