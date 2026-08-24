@@ -6,19 +6,20 @@ import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode
 
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
 
 from app.model.proxy_log_model import ProxyLogStatus
 from libs.meta_ads_collector.exceptions import RateLimitError
-from libs.meta_ads_collector.proxy_pool import ProxyPool
 from .meta_ads_embedded_json import getAds
 import random
-from .client import MetaAdsClient
 from .meta_ads_embedded_json import normalize_ad
-from app.service.meta_collector import MetaCollectorService, ReachThresholdReached
+
+
+class ReachThresholdReached(Exception):
+    """Raised from on_ad when mustReach / storeMustReach is satisfied."""
+
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
 OnRequestLogCallback = Callable[..., None]
@@ -623,7 +624,7 @@ class MetaAdsCrawler:
                         else:
                             print(f"GraphQL request failed: {api_response.status_code}")
                             break
-                    except ReachThresholdReached:
+                    except ReachThresholdReached as ex:
                         break
                     except Exception as e:
                         processing_retry_count += 1
