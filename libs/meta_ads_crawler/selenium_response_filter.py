@@ -18,6 +18,7 @@ from .meta_ads_embedded_json import getAds
 import random
 from .client import MetaAdsClient
 from .meta_ads_embedded_json import normalize_ad
+from app.service.meta_collector import MetaCollectorService, ReachThresholdReached
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
 OnRequestLogCallback = Callable[..., None]
