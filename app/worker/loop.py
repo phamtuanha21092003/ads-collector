@@ -648,7 +648,7 @@ class WorkerLoop:
                 and store_must_reach > 0
                 and store_total > store_must_reach
             ):
-                raise ReachThresholdReached(
+                raise (
                     f"stores {store_total} > storeMustReach {store_must_reach}"
                 )
 

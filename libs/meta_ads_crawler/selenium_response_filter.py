@@ -413,7 +413,7 @@ class MetaAdsCrawler:
                 body_params = dict(parse_qsl(captured_body))
                 body_params["variables"] = json.loads(body_params["variables"])
                 counter = int(body_params["__req"])
-                active_driver.quit()
+                # active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
                     try:
@@ -611,7 +611,6 @@ class MetaAdsCrawler:
                                 f"Facebook GraphQL successfully "
                                 f"(HTTP {api_response.status_code}) "
                                 f"Result: {ads_count} "
-                                f"next cursor: {cursor}"
                             )
                             # Reset the retry budget once this page has been
                             # successfully parsed and emitted.
@@ -623,7 +622,8 @@ class MetaAdsCrawler:
                         else:
                             print(f"GraphQL request failed: {api_response.status_code}")
                             break
-
+                    except ReachThresholdReached:
+                        break
                     except Exception as e:
                         processing_retry_count += 1
                         if processing_retry_count >= processing_max_retries:
