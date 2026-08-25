@@ -111,9 +111,8 @@ class AdRepository:
     async def count_active_by_product_url(self, product_url: str) -> int:
         # Raw URLs may contain tracking parameters, but must target this handle.
         product_page_url = product_url.removesuffix(".json")
-        link_pattern = rf"^{re.escape(product_page_url)}(?:[/?#]|$)"
         return await self._collection.count_documents(
-            {"raw.link_url": {"$regex": link_pattern}, "raw.is_active": True}
+            {"raw.link_url": product_page_url, "raw.is_active": True}
         )
 
     async def update_ads_qualified(

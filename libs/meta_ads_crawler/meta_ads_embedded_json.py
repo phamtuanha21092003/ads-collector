@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 from typing import Any
 from dataclasses import dataclass
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import (
+    TimeoutException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+)
 from selenium.webdriver.support.ui import WebDriverWait
 from app.util.format_url_util import canonical_product_url
 
@@ -129,14 +133,20 @@ def normalize_ad(ad: dict[str, Any]) -> dict[str, Any]:
 
 
 def wait_for_embedded_ads(driver: webdriver.Chrome, timeout: float) -> None:
-    WebDriverWait(driver, timeout).until(lambda browser: browser.execute_script("""
+    WebDriverWait(
+        driver,
+        timeout,
+        poll_frequency=5,
+        ignored_exceptions=[NoSuchElementException, StaleElementReferenceException],
+    ).until(
+        lambda browser: browser.execute_script("""
             return Array.from(document.querySelectorAll(
-                'script[type="application/json"][data-sjs]'
+                           'script[type="application/json"][data-sjs]'
             )).some(element =>
-                element.textContent.includes('ad_archive_id') ||
-                element.textContent.includes('collated_results')
+                element.textContent.includes('search_results_connection')
             );
-            """))
+            """)
+    )
 
 
 def read_script_contents(driver: webdriver.Chrome) -> list[str]:
@@ -194,4 +204,6 @@ def getAds(driver: webdriver.Chrome) -> AdsResponse:
     # Đợi ngắn để các payload defer còn lại được đưa vào DOM.
     time.sleep(2)
     script_contents = read_script_contents(driver)
+    if len(script_contents) == 0:
+        return
     return extract_reponse_from_scripts(script_contents)

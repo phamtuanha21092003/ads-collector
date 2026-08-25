@@ -1,7 +1,4 @@
-import base64
-from email import message
 import json
-import re
 import time
 from collections.abc import Callable
 from datetime import date
@@ -83,7 +80,7 @@ def create_driver(
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
     # if proxy:
-    #     options.add_argument(f"--proxy-server=http://27.72.102.142:5199")
+    # options.add_argument(f"--proxy-server=http://152.44.110.232:3128")
     chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
 
     # Pick random platform
@@ -101,23 +98,37 @@ def create_driver(
         f"Mozilla/5.0 ({platform['ua_os']}) AppleWebKit/537.36 "
         f"(KHTML, like Gecko) Chrome/{chrome_major}.0.0.0 Safari/537.36"
     )
-    options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
-    options.add_argument("--disable-quic")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument(f"--user-agent={user_agent}")
+
+    # options.add_argument(f"--user-agent={user_agent}")
     options.add_argument("--headless=false")
-    options.add_argument("--no-sandbox")
+    # options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+    # options.add_argument("--disable-quic")
+    # options.add_argument("--disable-blink-features=AutomationControlled")
+    # options.add_argument("--no-first-run")
+    # options.add_argument("--no-default-browser-check")
+    # options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-notifications")
     options.add_argument("--disable-dev-shm-usage")
-
-    # Enable performance logging to capture network requests
+    options.add_argument("--profile-directory=Default")
+    options.add_argument("--incognito")
+    options.add_argument("--disable-plugins-discovery")
+    options.add_argument("--start-maximized")
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-extensions")
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    driver = webdriver.Chrome(options=options)
+    driver.delete_all_cookies()
+    driver.set_window_size(800, 800)
+    driver.set_window_position(0, 0)
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
 
-    return webdriver.Chrome(options=options)
+    return driver
 
 
 def decode_for_filter(body: bytes) -> str:
@@ -323,10 +334,8 @@ class MetaAdsCrawler:
             active_driver = create_driver(proxy=proxy, enable_performance_logging=True)
             print(f"Open Page: {page_url}")
             active_driver.get(page_url)
-
             # Wait for page to load
-            time.sleep(10)
-
+            time.sleep(2)
             # Scroll down to trigger GraphQL API calls
             active_driver.execute_script(
                 "window.scrollTo(0, document.body.scrollHeight);"
@@ -410,7 +419,7 @@ class MetaAdsCrawler:
                 body_params = dict(parse_qsl(captured_body))
                 body_params["variables"] = json.loads(body_params["variables"])
                 counter = int(body_params["__req"])
-                # active_driver.quit()
+                active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
                     try:
@@ -642,31 +651,6 @@ class MetaAdsCrawler:
 
                 if session is not None:
                     session.close()
-            # else:
-            #     print(
-            #         "No GraphQL request data captured, falling back to MetaAdsClient..."
-            #     )
-            #     # Fallback to MetaAdsClient if no captured data
-            #     client = MetaAdsClient(proxy=proxy, html=html, max_retries=10)
-            #     while cursor is not None:
-            #         time.sleep(1.2)
-            #         response, cursor = client.search_ads(
-            #             cursor=cursor,
-            #             query=query,
-            #             active_status=status,
-            #             ad_type=ad_type,
-            #             start_date=start_date,
-            #             end_date=end_date,
-            #             sort_mode="SORT_BY_TOTAL_IMPRESSIONS",
-            #             on_request_log=on_request_log,
-            #         )
-            #         if response and isinstance(response, dict):
-            #             print("response oke")
-            #             response_ads = response.get("ads", [])
-            #             ads.extend(response_ads)
-            #             for ad in response_ads:
-            #                 emit_ads(normalize_ad(ad))
-            #             print(f"Captured {len(response_ads)} ads. Total: {len(ads)}")
 
             print(f"Total captured {len(ads)} ads.")
             return ads
