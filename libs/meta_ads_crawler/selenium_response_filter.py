@@ -11,15 +11,10 @@ from urllib.parse import parse_qsl, urlencode
 from selenium import webdriver
 
 from app.model.proxy_log_model import ProxyLogStatus
-from libs.meta_ads_collector.exceptions import RateLimitError
 from .meta_ads_embedded_json import getAds
 import random
 from .meta_ads_embedded_json import normalize_ad
-
-
-class ReachThresholdReached(Exception):
-    """Raised from on_ad when mustReach / storeMustReach is satisfied."""
-
+from app.exceptions import ReachThresholdReached, RateLimitError
 
 OnAdCallback = Callable[[dict[str, Any], str], None]
 OnRequestLogCallback = Callable[..., None]
@@ -449,10 +444,10 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            session.proxies = {
-                                "http": f"http://{request_id}:x@{proxy}",
-                                "https": f"http://{request_id}:x@{proxy}",
-                            }
+                            # session.proxies = {
+                            #     "http": f"http://{request_id}:x@{proxy}",
+                            #     "https": f"http://{request_id}:x@{proxy}",
+                            # }
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],

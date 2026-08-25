@@ -648,16 +648,9 @@ class WorkerLoop:
                 and store_must_reach > 0
                 and store_total > store_must_reach
             ):
-                raise (
-                    f"stores {store_total} > storeMustReach {store_must_reach}"
-                )
+                raise (f"stores {store_total} > storeMustReach {store_must_reach}")
 
         # fetch proxies from system config
-        if not self._meta._proxy_rotation_service is None:
-            await self._meta._proxy_rotation_service.load_from_mongo(
-                SystemConfigRepository(system_configs_collection(self._meta._settings))
-            )
-
         fetched = await asyncio.to_thread(
             self._meta.search,
             keyword=job.keyword,

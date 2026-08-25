@@ -16,14 +16,7 @@ from app.config import get_settings
 from app.model.proxy_log_model import ProxyLogModel, ProxyLogStatus
 from app.repository.proxy_log_repo import ProxyLogRepository
 from app.repository.system_config_repo import SystemConfigRepository
-from libs.meta_ads_collector import (
-    FilterConfig,
-    MetaAdsCollector,
-    ProxyError,
-    ProxyPool,
-    RateLimitError,
-    SessionExpiredError,
-)
+
 from libs.meta_ads_crawler import MetaAdsCrawler
 from tenacity import (
     retry,
@@ -37,7 +30,6 @@ from app.service.proxy_scrape import (
     ProxyScrapeService,
     normalize_proxy_to_host_port_user_pass,
 )
-from app.service.proxy_rotation import ProxyRotationService
 from app.db import (
     close_client,
     proxies_sync_collection,
@@ -45,6 +37,12 @@ from app.db import (
     system_configs_collection,
 )
 from app.util.telegram_util import send_telegram_message
+from app.exceptions import (
+    ReachThresholdReached,
+    RateLimitError,
+    SessionExpiredError,
+    ProxyError,
+)
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
 
@@ -61,28 +59,17 @@ META_PAGE_SIZE = 30
 _executor = ThreadPoolExecutor(max_workers=4)
 
 
-class ReachThresholdReached(Exception):
-    """Raised from on_ad when mustReach / storeMustReach is satisfied."""
-
-
 class MetaCollectorService:
     def __init__(
         self,
-        proxy_pool: ProxyPool | None = None,
-        proxy_rotation_service: ProxyRotationService | None = None,
         *,
         proxy_scrape: ProxyScrapeService | None = None,
         fallback_proxies: list[str] | None = None,
         proxy_log_repo: ProxyLogRepository | None = None,
     ) -> None:
-        self._proxy_pool = proxy_pool
         self._proxy_scrape = proxy_scrape
         self._fallback_proxies = list(fallback_proxies or [])
         self._settings = get_settings()
-        if not proxy_rotation_service:
-            proxy_rotation_service = ProxyRotationService()
-
-        self._proxy_rotation_service = proxy_rotation_service
         self._proxy_log_repo = proxy_log_repo or ProxyLogRepository(
             proxy_logs_sync_collection(self._settings)
         )
@@ -124,8 +111,6 @@ class MetaCollectorService:
             return "proxyscrape-random"
         if self._fallback_proxies:
             return "fallback-random"
-        if self._proxy_pool is not None and len(self._proxy_pool) > 0:
-            return "mongo-random"
         return "none"
 
     def _proxy_candidates(self) -> list[str]:
@@ -151,38 +136,17 @@ class MetaCollectorService:
         locked = 0
         cursor = 0
         while True:
-            cursor, keys = client.scan(
-                cursor, match=f"{PROXY_LOCK_PREFIX}*", count=200
-            )
+            cursor, keys = client.scan(cursor, match=f"{PROXY_LOCK_PREFIX}*", count=200)
             locked += sum(
                 1
                 for key in keys
-                if not str(key).startswith(EMPTY_PROXY_LOCK_PREFIX) and client.get(key) == LOCK_PROXY_KEY_VALUE
+                if not str(key).startswith(EMPTY_PROXY_LOCK_PREFIX)
+                and client.get(key) == LOCK_PROXY_KEY_VALUE
             )
             if cursor == 0:
                 break
         total = proxies_sync_collection(self._settings).count_documents({})
         return locked, int(total)
-
-    def _random_proxy_for_search(self) -> ProxyPool | str | None:
-        candidates = self._proxy_candidates()
-        if not candidates:
-            return None
-
-        shuffled = list(candidates)
-        random.shuffle(shuffled)
-        try:
-            pool = ProxyPool(shuffled)
-        except ProxyError as exc:
-            logger.warning("Failed to build random ProxyPool: {}", exc)
-            return shuffled[0] if shuffled else None
-
-        logger.info(
-            "Random proxy rotation: first={!r} total={}",
-            shuffled[0],
-            len(shuffled),
-        )
-        return pool
 
     @staticmethod
     def _raise_if_failed(futures: list[Future[None]]) -> None:

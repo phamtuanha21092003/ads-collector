@@ -12,7 +12,6 @@ from app.db import close_client, system_configs_collection
 from app.mq import close as close_mq
 from app.repository.system_config_repo import SystemConfigRepository
 from app.service.meta_collector import MetaCollectorService
-from app.service.proxy_rotation import ProxyRotationService
 from app.service.proxy_scrape import ProxyScrapeService
 from app.worker.loop import WorkerLoop
 from app.redis import connect as init_connection_redis
@@ -43,10 +42,6 @@ async def _async_main() -> None:
 
     init_connection_redis(settings=settings)
 
-    proxy_rotation = ProxyRotationService()
-    await proxy_rotation.load_from_mongo(
-        SystemConfigRepository(system_configs_collection(settings))
-    )
     proxy_scrape = ProxyScrapeService(
         url=settings.proxyscrape_url,
         api_token=settings.proxyscrape_api_token,
@@ -61,9 +56,7 @@ async def _async_main() -> None:
         )
 
     meta = MetaCollectorService(
-        proxy_pool=proxy_rotation.pool,
         proxy_scrape=proxy_scrape,
-        proxy_rotation_service=proxy_rotation
     )
     analyzer = AIClient(settings)
     worker = WorkerLoop(settings, meta=meta, analyzer=analyzer)

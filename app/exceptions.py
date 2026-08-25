@@ -1,4 +1,5 @@
-"""Custom exceptions for Meta Ads Library Collector."""
+class ReachThresholdReached(Exception):
+    """Raised from on_ad when mustReach / storeMustReach is satisfied."""
 
 
 class MetaAdsError(Exception):
@@ -12,7 +13,9 @@ class AuthenticationError(MetaAdsError):
 class RateLimitError(MetaAdsError):
     """Raised when the Meta API rate-limits requests."""
 
-    def __init__(self, message: str = "Rate limited by Meta API", retry_after: float = 0):
+    def __init__(
+        self, message: str = "Rate limited by Meta API", retry_after: float = 0
+    ):
         super().__init__(message)
         self.retry_after = retry_after
 
