@@ -4,6 +4,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 from app.model.product_model import ProductModel
 from app.util.format_url_util import canonical_product_url
+from app.base.model_base import utc_now
 
 
 class ProductRepository:
@@ -20,6 +21,7 @@ class ProductRepository:
         link_ads_url: str,
         keywords: list[str],
     ) -> ProductModel:
+        now = utc_now()
         """Keep one product per canonical product URL while retaining all source jobs."""
         link_url = canonical_product_url(link_url)
         _job_ids = [job_id for job_id in job_ids if job_id is not None]
@@ -31,6 +33,7 @@ class ProductRepository:
                     "linkUrl": link_url,
                     "shop": shop,
                     "linkAdsUrl": link_ads_url,
+                    "updatedAt": now,
                 },
                 "$addToSet": {
                     "jobIds": {"$each": _job_ids},
@@ -41,6 +44,9 @@ class ProductRepository:
                             if keyword and keyword.strip().lower() != shop.lower()
                         ]
                     },
+                },
+                "$setOnInsert": {
+                    "createdAt": now,
                 },
             },
             upsert=True,

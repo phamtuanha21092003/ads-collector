@@ -15,6 +15,7 @@ from loguru import logger
 from app.config import get_settings
 from app.model.proxy_log_model import ProxyLogModel, ProxyLogStatus
 from app.repository.proxy_log_repo import ProxyLogRepository
+from app.repository.proxy_repo import ProxyRepository
 from app.repository.system_config_repo import SystemConfigRepository
 
 from libs.meta_ads_crawler import MetaAdsCrawler
@@ -72,6 +73,9 @@ class MetaCollectorService:
         self._settings = get_settings()
         self._proxy_log_repo = proxy_log_repo or ProxyLogRepository(
             proxy_logs_sync_collection(self._settings)
+        )
+        self._proxy_repo = ProxyRepository(
+            proxies_sync_collection(self._settings)
         )
 
     def search(
@@ -254,15 +258,26 @@ class MetaCollectorService:
                 raw_proxy = log.get("proxy")
                 if not raw_proxy:
                     return
-
+                
+                limit_time = 30
                 proxy = self._standard_proxy_format(str(raw_proxy))
                 client = get_redis()
                 key = f"{PROXY_LOCK_PREFIX}{raw_proxy}"
                 value = client.get(key)
-                client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * 30)
 
                 if value == LOCK_PROXY_KEY_VALUE:
                     return
+
+                p = self._proxy_repo.find_proxy_by_domain_and_update(raw_proxy)
+                if isinstance(p, dict):
+                    def calculate_limit(n: int) -> int:
+                        if n == 0:
+                            return 10
+
+                        return min(10 + 30 * n, 720)
+
+                    limit_time = calculate_limit(p.get('timeRatelimit', 0))
+                client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * limit_time)
 
                 locked, total = self._locked_proxy_counts(client)
                 print(f"proxy={proxy} locked={raw_proxy}/{total}")
@@ -275,7 +290,7 @@ class MetaCollectorService:
                 )
 
                 send_telegram_message(
-                    f"Proxy {proxy} is locked for the next 30 minutes ({locked}/{total})"
+                    f"Proxy {proxy} is locked for the next {limit_time} minutes ({locked}/{total})"
                 )
 
         try:

@@ -29,7 +29,6 @@ class ProxyLogRepository:
         request_body: Any = None,
     ) -> Any:
         try:
-        
             update_data = {}
 
             if body is not None:
@@ -58,11 +57,11 @@ class ProxyLogRepository:
                 {"$set": update_data},
                 upsert=False,
             )
-            
+
             record = self._collection.find_one(
                {"requestId": request_id}
             )
-            
+
             return record
         except Exception:
             logger.exception("Failed to update proxy log")
