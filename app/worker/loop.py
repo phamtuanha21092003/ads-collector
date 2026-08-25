@@ -648,7 +648,9 @@ class WorkerLoop:
                 and store_must_reach > 0
                 and store_total > store_must_reach
             ):
-                raise (f"stores {store_total} > storeMustReach {store_must_reach}")
+                raise ReachThresholdReached(
+                    f"stores {store_total} > storeMustReach {store_must_reach}"
+                )
 
         # fetch proxies from system config
         fetched = await asyncio.to_thread(
