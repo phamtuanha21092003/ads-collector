@@ -334,6 +334,11 @@ class MetaAdsCrawler:
             active_driver = create_driver(proxy=proxy, enable_performance_logging=True)
             print(f"Open Page: {page_url}")
             active_driver.get(page_url)
+            time.sleep(1.2)
+            response = getAds(active_driver)
+            ads = response.ads if hasattr(response, "ads") else []
+            cursor = response.cursor if hasattr(response, "cursor") else None
+            
             # Wait for page to load
             time.sleep(2)
             # Scroll down to trigger GraphQL API calls
@@ -389,10 +394,7 @@ class MetaAdsCrawler:
                     continue
 
             # Get initial ads from page
-            response = getAds(active_driver)
-            ads = response.ads if hasattr(response, "ads") else []
-            cursor = response.cursor if hasattr(response, "cursor") else None
-
+        
             for ad in ads:
                 emit_ads(ad)
             if not cursor:
