@@ -79,8 +79,8 @@ def create_driver(
     enable_performance_logging: bool = False,
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
-    # if proxy:
-    # options.add_argument(f"--proxy-server=http://152.44.110.232:3128")
+    if proxy:
+        options.add_argument(f"--proxy-server=http://199.101.136.177:3128")
     chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
 
     # Pick random platform
@@ -338,7 +338,7 @@ class MetaAdsCrawler:
             response = getAds(active_driver)
             ads = response.ads if hasattr(response, "ads") else []
             cursor = response.cursor if hasattr(response, "cursor") else None
-            
+
             # Wait for page to load
             time.sleep(2)
             # Scroll down to trigger GraphQL API calls
@@ -394,7 +394,7 @@ class MetaAdsCrawler:
                     continue
 
             # Get initial ads from page
-        
+
             for ad in ads:
                 emit_ads(ad)
             if not cursor:
@@ -420,7 +420,13 @@ class MetaAdsCrawler:
                 session: Any | None = None
                 body_params = dict(parse_qsl(captured_body))
                 body_params["variables"] = json.loads(body_params["variables"])
-                counter = int(body_params["__req"])
+                req = body_params["__req"]
+                if isinstance(req, int):
+                    counter = req
+                elif req.isdigit():
+                    counter = int(req)
+                else:
+                    counter = int(req, 16)
                 active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
@@ -456,9 +462,10 @@ class MetaAdsCrawler:
                                     name, value, domain=".facebook.com", path="/"
                                 )
                             session.proxies = {
-                                "http": f"http://{request_id}:x@{proxy}",
-                                "https": f"http://{request_id}:x@{proxy}",
+                                "http": f"http://ulmsg_duong:Sb5pK2OT\:171.236.117.19:22374",
+                                "https": f"http://ulmsg_duong:Sb5pK2OT\:171.236.117.19:22374",
                             }
+
                             try:
                                 api_response = session.post(
                                     graphql_request_data["url"],
