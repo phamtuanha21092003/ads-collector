@@ -462,8 +462,8 @@ class MetaAdsCrawler:
                                     name, value, domain=".facebook.com", path="/"
                                 )
                             session.proxies = {
-                                "http": f"http://ulmsg_duong:Sb5pK2OT\:171.236.117.19:22374",
-                                "https": f"http://ulmsg_duong:Sb5pK2OT\:171.236.117.19:22374",
+                                "http": f"http://{request_id}:x@{proxy}",
+                                "https": f"http://{request_id}:x@{proxy}",
                             }
 
                             try:
