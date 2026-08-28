@@ -272,7 +272,7 @@ class MetaCollectorService:
                     return
 
                 limit_time = 30
-                p = self._proxy_repo.find_proxy_by_id_and_update(raw_proxy)
+                p = self._proxy_repo.find_proxy_by_id_and_update(proxy_id_native)
                 if isinstance(p, dict):
                     def calculate_limit(n: int) -> int:
                         if n == 0:
