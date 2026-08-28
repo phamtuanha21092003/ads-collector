@@ -47,7 +47,7 @@ from app.exceptions import (
 
 OnAdCallback = Callable[[dict[str, Any], str, int], None]
 
-PROXY_LOCK_PREFIX = "proxy:lock:"
+PROXY_LOCK_INFIX = "-id:proxy:lock:"
 EMPTY_PROXY_LOCK_PREFIX = "proxy:lock:empty:"
 EMPTY_PROXY_SLOTS = 3
 HEALTH_CHECK_URL = "https://spy.dropshiptools.xyz/api/health"
@@ -140,7 +140,7 @@ class MetaCollectorService:
         locked = 0
         cursor = 0
         while True:
-            cursor, keys = client.scan(cursor, match=f"{PROXY_LOCK_PREFIX}*", count=200)
+            cursor, keys = client.scan(cursor, match=f"*{PROXY_LOCK_INFIX}*", count=200)
             locked += sum(
                 1
                 for key in keys
@@ -255,20 +255,24 @@ class MetaCollectorService:
                 and isinstance(err, dict)
                 and err.get("err") == "Rate limit"
             ):
+                proxy_id_native = log.get('proxyId', '')
+                if not proxy_id_native:
+                    return
+
                 raw_proxy = log.get("proxy")
                 if not raw_proxy:
                     return
-                
-                limit_time = 30
+
                 proxy = self._standard_proxy_format(str(raw_proxy))
                 client = get_redis()
-                key = f"{PROXY_LOCK_PREFIX}{raw_proxy}"
+                key = f"{str(proxy_id_native)}{PROXY_LOCK_INFIX}{raw_proxy}"
                 value = client.get(key)
 
                 if value == LOCK_PROXY_KEY_VALUE:
                     return
 
-                p = self._proxy_repo.find_proxy_by_domain_and_update(raw_proxy)
+                limit_time = 30
+                p = self._proxy_repo.find_proxy_by_id_and_update(raw_proxy)
                 if isinstance(p, dict):
                     def calculate_limit(n: int) -> int:
                         if n == 0:
@@ -277,6 +281,7 @@ class MetaCollectorService:
                         return min(10 + 30 * n, 720)
 
                     limit_time = calculate_limit(p.get('timeRatelimit', 0))
+
                 client.set(key, LOCK_PROXY_KEY_VALUE, ex=60 * limit_time)
 
                 locked, total = self._locked_proxy_counts(client)
