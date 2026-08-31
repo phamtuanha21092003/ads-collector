@@ -594,37 +594,44 @@ class WorkerLoop:
                 loop,
             ).result()
 
-            try:
-                product_result = get_product_from_url(
-                    url=link_url, proxy=self._settings.proxy_manager
-                )
-                if product_result is not None:
-                    _, product = product_result
-                    product = asyncio.run_coroutine_threadsafe(
-                        self._product_repo.upsert_one(
-                            product=product,
-                            job_ids=[job.id, self._parent_job_id(job.metadata), rootId],
-                            link_url=product_url,
-                            shop=shop,
-                            link_ads_url=link_ads_url,
-                            keywords=[
-                                (
-                                    job.keyword
-                                    if spawn_domains_immediately
-                                    else job.primary_keyword
-                                )
-                            ],
-                        ),
-                        loop,
-                    ).result()
-                    with state_lock:
-                        product_shops.setdefault(product_url, shop)
-                        current_rank = product_ranks.get(product_url)
-                        if current_rank is None or impression_rank < current_rank:
-                            product_ranks[product_url] = impression_rank
+            if product_ranks.get(product_url) is None:
+                try:
+                    product_result = get_product_from_url(
+                        url=link_url, proxy=self._settings.proxy_manager
+                    )
+                    if product_result is not None:
+                        _, product = product_result
+                        product = asyncio.run_coroutine_threadsafe(
+                            self._product_repo.upsert_one(
+                                product=product,
+                                job_ids=[
+                                    job.id,
+                                    self._parent_job_id(job.metadata),
+                                    rootId,
+                                ],
+                                link_url=product_url,
+                                shop=shop,
+                                link_ads_url=link_ads_url,
+                                keywords=[
+                                    (
+                                        job.keyword
+                                        if spawn_domains_immediately
+                                        else job.primary_keyword
+                                    )
+                                ],
+                            ),
+                            loop,
+                        ).result()
+                        with state_lock:
+                            product_shops.setdefault(product_url, shop)
+                            current_rank = product_ranks.get(product_url)
+                            if current_rank is None or impression_rank < current_rank:
+                                product_ranks[product_url] = impression_rank
 
-            except Exception as exc:
-                logger.warning("Could not collect product from {!r}: {}", link_url, exc)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not collect product from {!r}: {}", link_url, exc
+                    )
 
             asyncio.run_coroutine_threadsafe(
                 self._publish_keyword_progress(
