@@ -595,7 +595,9 @@ class WorkerLoop:
             ).result()
 
             try:
-                product_result = get_product_from_url(link_url)
+                product_result = get_product_from_url(
+                    url=link_url, proxy=self._settings.proxy_manager
+                )
                 if product_result is not None:
                     _, product = product_result
                     product = asyncio.run_coroutine_threadsafe(

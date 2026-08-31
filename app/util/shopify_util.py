@@ -3,31 +3,83 @@ from urllib.parse import urlparse
 import dns.resolver
 import requests
 from app.util.format_url_util import canonical_product_url
+import time
 
 SHOPIFY_IPS = {
     "23.227.38.65",
 }
 
+RETRY_STATUS_CODES = {429, 500, 501, 502, 503}
 
-def get_product_from_url(url: str, timeout: int = 10) -> tuple[str, dict] | None:
-    """Fetch a Shopify product payload from a raw ad product URL."""
+
+def get_product_from_url(url, timeout=10, proxy=None, max_retries=5):
     product_url = canonical_product_url(url=url, include_json=True)
     if product_url is None:
         return None
-    response = requests.get(
-        product_url,
-        timeout=timeout,
-        headers={"User-Agent": "Mozilla/5.0"},
-    )
-    if response.status_code != 200 or not response.headers.get(
-        "Content-Type", ""
-    ).startswith("application/json"):
-        return None
-    payload = response.json()
-    product = payload.get("product") if isinstance(payload, dict) else None
-    if not isinstance(product, dict):
-        return None
-    return product_url, product
+    for attempt in range(max_retries + 1):
+        proxy_config = {}
+        if proxy:
+            proxy_config = {
+                "http": f"http://{proxy}",
+                "https": f"http://{proxy}",
+            }
+
+        try:
+            response = requests.get(
+                product_url,
+                timeout=timeout,
+                headers={"User-Agent": "Mozilla/5.0"},
+                proxies=proxy_config,
+            )
+
+            status = response.status_code
+
+            # Success
+            if status == 200:
+                content_type = response.headers.get("Content-Type", "")
+
+                if not content_type.startswith("application/json"):
+                    return None
+
+                payload = response.json()
+
+                product = payload.get("product") if isinstance(payload, dict) else None
+
+                if not isinstance(product, dict):
+                    return None
+
+                return product_url, product
+
+            # Retry only these status codes
+            if status in RETRY_STATUS_CODES:
+                print(
+                    f"product status={status}, "
+                    f"attempt={attempt + 1}/{max_retries + 1}, "
+                )
+
+                if attempt < max_retries:
+                    # 1s -> 2s -> 4s
+                    time.sleep(2**attempt)
+                    continue
+
+            # Other status: don't retry
+            print(f"product status={status}, no retry")
+            return None
+
+        except requests.RequestException as e:
+            # Network errors / timeout -> retry
+            print(
+                f"product request error={e}, "
+                f"attempt={attempt + 1}/{max_retries + 1}, "
+            )
+
+            if attempt < max_retries:
+                time.sleep(2**attempt)
+                continue
+
+            return None
+
+    return None
 
 
 def extract_domain(url: str) -> str | None:

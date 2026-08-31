@@ -80,7 +80,7 @@ def create_driver(
 ) -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
     if proxy:
-        options.add_argument(f"--proxy-server=http://199.101.136.177:3128")
+        options.add_argument(f"--proxy-server=http://{proxy}")
     chrome_major, chrome_full = random.choice(CHROME_VERSIONS)
 
     # Pick random platform
@@ -99,14 +99,13 @@ def create_driver(
         f"(KHTML, like Gecko) Chrome/{chrome_major}.0.0.0 Safari/537.36"
     )
 
-    # options.add_argument(f"--user-agent={user_agent}")
+    options.add_argument(f"--user-agent={user_agent}")
     options.add_argument("--headless=false")
-    # options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
-    # options.add_argument("--disable-quic")
-    # options.add_argument("--disable-blink-features=AutomationControlled")
-    # options.add_argument("--no-first-run")
-    # options.add_argument("--no-default-browser-check")
-    # options.add_argument("--no-sandbox")
+    options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+    options.add_argument("--disable-quic")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1440,1200")
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-notifications")
@@ -124,9 +123,9 @@ def create_driver(
     driver.delete_all_cookies()
     driver.set_window_size(800, 800)
     driver.set_window_position(0, 0)
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
+    # driver.execute_script(
+    #     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    # )
 
     return driver
 
@@ -338,7 +337,6 @@ class MetaAdsCrawler:
             response = getAds(active_driver)
             ads = response.ads if hasattr(response, "ads") else []
             cursor = response.cursor if hasattr(response, "cursor") else None
-
             # Wait for page to load
             time.sleep(2)
             # Scroll down to trigger GraphQL API calls
@@ -426,7 +424,7 @@ class MetaAdsCrawler:
                 elif req.isdigit():
                     counter = int(req)
                 else:
-                    counter = int(req, 16)
+                    counter = int(req, 32)
                 active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
@@ -462,8 +460,8 @@ class MetaAdsCrawler:
                                     name, value, domain=".facebook.com", path="/"
                                 )
                             session.proxies = {
-                                "http": f"http://{request_id}:x@{proxy}",
-                                "https": f"http://{request_id}:x@{proxy}",
+                                "http": f"http://{proxy}",
+                                "https": f"http://{proxy}",
                             }
 
                             try:
