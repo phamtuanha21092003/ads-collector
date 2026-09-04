@@ -597,7 +597,10 @@ class WorkerLoop:
             if product_ranks.get(product_url) is None:
                 try:
                     product_result = get_product_from_url(
-                        url=link_url, proxy=self._settings.proxy_manager
+                        url=link_url,
+                        proxy=self._settings.proxy_manager,
+                        max_retries=10,
+                        timeout=30,
                     )
                     if product_result is not None:
                         _, product = product_result
