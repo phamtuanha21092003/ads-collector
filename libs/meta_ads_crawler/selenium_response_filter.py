@@ -412,7 +412,7 @@ class MetaAdsCrawler:
                 # Parse the captured request body to extract variables
                 captured_body = graphql_request_data["request_body"]
 
-                processing_max_retries = 5
+                processing_max_retries = 10
                 processing_retry_count = 0
                 processing_retry_delay = 2
                 session: Any | None = None
@@ -424,7 +424,7 @@ class MetaAdsCrawler:
                 elif req.isdigit():
                     counter = int(req)
                 else:
-                    counter = int(req, 32)
+                    counter = int(req, 64)
                 active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
