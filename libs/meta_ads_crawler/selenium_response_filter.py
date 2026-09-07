@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
+from openai import max_retries
 from selenium import webdriver
 
 from app.model.proxy_log_model import ProxyLogStatus
@@ -389,10 +390,11 @@ class MetaAdsCrawler:
                                 break
 
                 except (json.JSONDecodeError, KeyError):
+                    print("Error parsing performance log entry, skipping...")
                     continue
 
             # Get initial ads from page
-
+            print(f"Captured {len(ads)} ads from initial page load.")
             for ad in ads:
                 emit_ads(ad)
             if not cursor:
@@ -419,12 +421,6 @@ class MetaAdsCrawler:
                 body_params = dict(parse_qsl(captured_body))
                 body_params["variables"] = json.loads(body_params["variables"])
                 req = body_params["__req"]
-                if isinstance(req, int):
-                    counter = req
-                elif req.isdigit():
-                    counter = int(req)
-                else:
-                    counter = int(req, 64)
                 active_driver.quit()
                 while cursor is not None:
                     time.sleep(1.2)
@@ -433,8 +429,9 @@ class MetaAdsCrawler:
 
                         # Update cursor in the body
                         body_params["variables"]["cursor"] = cursor
-                        body_params["__req"] = self._encode_request_id(counter)
-                        counter = counter + 1
+                        req = self.next_req(req)
+                        body_params["__req"] = req
+                        body_params["variables"]["first"] = 30
                         # Rebuild the body
                         updated_body = urlencode(
                             {
@@ -444,12 +441,10 @@ class MetaAdsCrawler:
                                 ),
                             }
                         )
-
                         # Make GraphQL request using captured headers and body with retry on rate limit
-                        max_retries = 10
+                        max_retries = 20
                         retry_delay = 2  # Initial delay in seconds
-
-                        for retry_count in range(max_retries):
+                        for retry_count in range(0, max_retries + 1):
                             from curl_cffi.requests import Session as CffiSession
 
                             request_id = str(uuid7())
@@ -459,10 +454,11 @@ class MetaAdsCrawler:
                                 session.cookies.set(
                                     name, value, domain=".facebook.com", path="/"
                                 )
-                            session.proxies = {
-                                "http": f"http://{proxy}",
-                                "https": f"http://{proxy}",
-                            }
+                            if proxy:
+                                session.proxies = {
+                                    "http": f"http://{proxy}",
+                                    "https": f"http://{proxy}",
+                                }
 
                             try:
                                 api_response = session.post(
@@ -529,6 +525,80 @@ class MetaAdsCrawler:
                                             ),
                                         )
 
+                                    results = (
+                                        response_data.get("data", {})
+                                        .get("ad_library_main", {})
+                                        .get("search_results_connection", {})
+                                    )
+
+                                    if not results:
+                                        results = (
+                                            response_data.get("data", {})
+                                            .get("adLibraryMain", {})
+                                            .get("searchResultsConnection", {})
+                                        )
+
+                                    if not results:
+                                        results = response_data.get("data", {})
+
+                                    edges = results.get("edges", [])
+                                    page_info = results.get(
+                                        "page_info", {}
+                                    ) or results.get("pageInfo", {})
+                                    # Get next cursor
+                                    next_cursor = None
+                                    if page_info.get("has_next_page") or page_info.get(
+                                        "hasNextPage"
+                                    ):
+                                        next_cursor = page_info.get(
+                                            "end_cursor"
+                                        ) or page_info.get("endCursor")
+
+                                    # Extract ads
+                                    ads_count = 0
+                                    for edge in edges:
+                                        node = edge.get("node", edge)
+                                        if node:
+                                            collated = node.get("collated_results", [])
+                                            for ad_data in collated:
+                                                snapshot = ad_data.get("snapshot") or {}
+                                                flattened = dict(ad_data)
+                                                ads_count = ads_count + 1
+                                                if snapshot:
+                                                    for key, value in snapshot.items():
+                                                        if key not in flattened:
+                                                            flattened[key] = value
+                                                ads.append(flattened)
+                                                emit_ads(normalize_ad(flattened))
+                                    print(
+                                        f"Facebook GraphQL successfully "
+                                        f"(HTTP {api_response.status_code}) "
+                                        f"Result: {ads_count} "
+                                    )
+                                    # Reset the retry budget once this page has been
+                                    # successfully parsed and emitted.
+                                    processing_retry_count = 0
+                                    processing_retry_delay = 2
+
+                                    if next_cursor is None and ads_count == 0:
+                                        if retry_count == max_retries:
+                                            print(
+                                                f"No ads found in GraphQL response after "
+                                                f"{max_retries} attempts. Stopping."
+                                            )
+                                            cursor = None
+                                            break
+                                        time.sleep(2 * 60 * random.uniform(0, 1))
+                                        print(
+                                            f"No ads found in GraphQL response. Retrying in "
+                                            f"attempts ({retry_count+1}/{max_retries})."
+                                        )
+                                        continue
+
+                                    if next_cursor is None:
+                                        print("No more pages to fetch.")
+                                        break
+                                    cursor = next_cursor
                                 except json.JSONDecodeError:
                                     # A malformed successful response can be transient.
                                     is_retryable = True
@@ -565,76 +635,6 @@ class MetaAdsCrawler:
                         else:
                             # All retries exhausted
                             break
-
-                        if api_response.status_code == 200:
-                            response_text = api_response.text
-                            if response_text.startswith("for (;;);"):
-                                response_text = response_text[9:]
-
-                            response_data = json.loads(response_text)
-                            # Parse response
-                            results = (
-                                response_data.get("data", {})
-                                .get("ad_library_main", {})
-                                .get("search_results_connection", {})
-                            )
-
-                            if not results:
-                                results = (
-                                    response_data.get("data", {})
-                                    .get("adLibraryMain", {})
-                                    .get("searchResultsConnection", {})
-                                )
-
-                            if not results:
-                                results = response_data.get("data", {})
-
-                            edges = results.get("edges", [])
-                            page_info = results.get("page_info", {}) or results.get(
-                                "pageInfo", {}
-                            )
-                            # Get next cursor
-                            next_cursor = None
-                            if page_info.get("has_next_page") or page_info.get(
-                                "hasNextPage"
-                            ):
-                                next_cursor = page_info.get(
-                                    "end_cursor"
-                                ) or page_info.get("endCursor")
-
-                            cursor = next_cursor
-
-                            # Extract ads
-                            ads_count = 0
-                            for edge in edges:
-                                node = edge.get("node", edge)
-                                if node:
-                                    collated = node.get("collated_results", [])
-                                    for ad_data in collated:
-                                        snapshot = ad_data.get("snapshot") or {}
-                                        flattened = dict(ad_data)
-                                        ads_count = ads_count + 1
-                                        if snapshot:
-                                            for key, value in snapshot.items():
-                                                if key not in flattened:
-                                                    flattened[key] = value
-                                        ads.append(flattened)
-                                        emit_ads(normalize_ad(flattened))
-                            print(
-                                f"Facebook GraphQL successfully "
-                                f"(HTTP {api_response.status_code}) "
-                                f"Result: {ads_count} "
-                            )
-                            # Reset the retry budget once this page has been
-                            # successfully parsed and emitted.
-                            processing_retry_count = 0
-                            processing_retry_delay = 2
-
-                            if cursor is None:
-                                break
-                        else:
-                            print(f"GraphQL request failed: {api_response.status_code}")
-                            break
                     except ReachThresholdReached as ex:
                         break
                     except Exception as e:
@@ -667,13 +667,34 @@ class MetaAdsCrawler:
             if active_driver is not None:
                 active_driver.quit()
 
-    def _encode_request_id(self, counter: int) -> str:
-        """Encode the request counter as a base-36 string."""
-        if counter < 10:
-            return str(counter)
-        chars = "0123456789abcdefghijklmnopqrstuvwxyz"
-        result = ""
-        while counter:
-            result = chars[counter % 36] + result
-            counter //= 36
-        return result
+    def next_req(self, current_req: str) -> str:
+        current_req = current_req.lower().strip()
+
+        if not current_req:
+            return "1"
+
+        # 1 -> 2 -> ... -> 9 -> 10
+        if current_req.isdigit():
+            n = int(current_req)
+
+            if n == 9:
+                return "10"
+
+            # 10 -> ... -> 19 -> 1a
+            if n % 10 == 9:
+                return f"{n // 10}a"
+
+            return str(n + 1)
+
+        # Dạng: 1a -> 1b -> ... -> 1z -> 20
+        prefix = current_req[:-1]
+        suffix = current_req[-1]
+
+        # Nếu prefix rỗng, ví dụ "a"
+        if not prefix:
+            return "b" if suffix != "z" else "10"
+
+        if suffix != "z":
+            return prefix + chr(ord(suffix) + 1)
+
+        return str((int(prefix) + 1) * 10)
